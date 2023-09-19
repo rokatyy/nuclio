@@ -62,7 +62,7 @@ The simplest way to explore Nuclio is to run its graphical user interface (GUI) 
 docker run -p 8070:8070 -v /var/run/docker.sock:/var/run/docker.sock --name nuclio-dashboard quay.io/nuclio/dashboard:stable-amd64
 ```
 
-![dashboard](/docs/assets/images/dashboard.png)
+![dashboard](./docs/assets/images/dashboard.png)
 
 Browse to http://localhost:8070, create a project, and add a function. When run outside of an orchestration platform (for example, Kubernetes), the dashboard will simply deploy to the local Docker daemon.
 
@@ -85,7 +85,7 @@ For a complete step-by-step guide to using Nuclio over Kubernetes, either with t
 
 "When this happens, do that". Nuclio tries to abstract away all the scaffolding around taking an event that occurred (e.g. a record was written into Kafka, an HTTP request was made, a timer expired) and passing this information to a piece of code for processing. To do this, Nuclio expects the users to provide (at the very least) information about what can trigger an event and the code to run when such an event happens. Users provide this information to Nuclio either via the command line utility (`nuctl`), a REST API or visually through a web application. 
 
-![architecture](/docs/assets/images/architecture-3.png)
+![architecture](./docs/assets/images/architecture-3.png)
 
 Nuclio takes this information (namely, the function `handler` and the function `configuration`) and sends it to a builder. This builder will craft the function's container image holding the user's handler and a piece of software that can execute this handler whenever events are received (more on that in a bit). The builder will then "publish" this container image by pushing it to a container registry.
 

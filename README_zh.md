@@ -58,7 +58,7 @@ All you need to run the dashboard is Docker:
 docker run -p 8070:8070 -v /var/run/docker.sock:/var/run/docker.sock --name nuclio-dashboard quay.io/nuclio/dashboard:stable-amd64
 ```
 
-![dashboard](/docs/assets/images/dashboard.png)
+![dashboard](./docs/assets/images/dashboard.png)
 
 在浏览器中访问 http://localhost:8070, 新建一个项目，并在其中添加一个函数。 当你在一些编排平台（例如，Kubernetes）之外运行时，仪表盘将会被直接运行在本地的 Docker 进程中。
 
@@ -83,7 +83,7 @@ curl -X POST \
 
 “当发生这种事情时，请这样做”。Nuclio 试图抽象所有围绕事件已经发生的脚手架工具（例如，将消息记录写入 Kafka，发起一个 HTTP 请求，计时器到期等）并将此信息发送给一段代码逻辑来处理。为了实现这个目标，Nuclio 希望用户可以提供（至少）关于什么可以触发一个事件并且在发生此类事件时应该由哪一段代码逻辑来进行处理的详细信息。用户可以通过命令行工具（`nuctl`）、REST API或者一个可视化的 Web 端应用程序。
 
-![architecture](/docs/assets/images/architecture-3.png)
+![architecture](./docs/assets/images/architecture-3.png)
 
 Nuclio 获取这些信息（通常称为函数处理程序 `handler` 和函数配置 `configuration`）并发送给构建器。构建器将会制作函数的容器镜像，其中包含用户提供的函数处理程序以及一个可以在接收到事件后执行该函数处理程序的软件工具（稍后有更详细的介绍）。然后，构建器将该该容器镜像发布到容器镜像注册表中。
 

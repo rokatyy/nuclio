@@ -197,7 +197,7 @@ Configure a data source using the [plugin support page](https://github.com/grafa
 
 Finally, see the provided sample Grafana JSON file (**[grafana-sample-dashboard.json](/docs/assets/grafana-sample-dashboard.json)**), which you can import from the Grafana dashboard: from the menu (plus icon - `+`) select **Create > Import** and upload the sample JSON file.
 
-![Grafana Dashboard](/docs/assets/images/grafana-dashboard.jpg?raw=true "Grafana Dashboard")
+![Grafana Dashboard](../../assets/images/grafana-dashboard.jpg?raw=true "Grafana Dashboard")
 
 ### Further metric analysis using Application Insights
 
