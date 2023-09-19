@@ -26,13 +26,13 @@
         - [reference](/reference/runtimes/dotnetcore/dotnetcore-reference.md)
         - [writing a dotnetcore function](/reference/runtimes/dotnetcore/writing-a-dotnetcore-function.md)
       - Golang
-        - [golang reference](/reference/runtimes/golang/golang-reference.md)
+        - [golang reference](./reference/runtimes/golang/golang-reference.md)
       - Java
-        - [java reference](/reference/runtimes/java/java-reference.md)
+        - [java reference](./reference/runtimes/java/java-reference.md)
       - Nodejs
-        - [nodejs reference](/reference/runtimes/nodejs/nodejs-reference.md)
+        - [nodejs reference](./reference/runtimes/nodejs/nodejs-reference.md)
       - Python
-        - [python reference](/reference/runtimes/python/python-reference.md)
+        - [python reference](./reference/runtimes/python/python-reference.md)
       - [runtime feature matrix](/reference/runtimes/runtime-feature-matrix.md)
       - Shell
         - [writing a shell function](/reference/runtimes/shell/writing-a-shell-function.md)
