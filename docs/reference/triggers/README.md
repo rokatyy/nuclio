@@ -1,0 +1,10 @@
+Currently nuclio supports following triggers:
+* [cron](cron.md)
+* [http](http.md)
+* [kafka](kafka.md)
+* [kinesis](kinesis.md)
+* [mqtt](mqtt.md)
+* [v3iostream](v3iostream.md)
+* [rabbitmq](rabbitmq.md)
+* [nats](nats.md)
+* [eventhub](eventhub.md)
