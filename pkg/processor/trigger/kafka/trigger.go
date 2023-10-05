@@ -263,6 +263,9 @@ func (k *kafka) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.C
 					message.Offset+1-ackWindowSize,
 					"",
 				)
+			} else {
+				k.Logger.ErrorWith("Error occurred when submitting event",
+					"partition", claim.Partition())
 			}
 
 		case <-session.Context().Done():
@@ -272,6 +275,9 @@ func (k *kafka) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.C
 
 			// don't consume any more messages
 			consumeMessages = false
+			close(submittedEventChan)
+			k.Logger.DebugWith("Event submitting chan close",
+				"partition", claim.Partition())
 
 			// trigger is ready for rebalance if both the handler is done and
 			// the workers are finished draining events
@@ -296,6 +302,9 @@ func (k *kafka) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.C
 							message.Offset+1-ackWindowSize,
 							"",
 						)
+					} else {
+						k.Logger.ErrorWith("Error occurred when submitting event",
+							"partition", claim.Partition())
 					}
 					k.Logger.DebugWith("Handler done", "partition", claim.Partition())
 					wg.Done()
@@ -361,7 +370,6 @@ func (k *kafka) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.C
 	}
 
 	// shut down goroutines and channels
-	close(submittedEventChan)
 	close(explicitAckControlMessageChan)
 	close(workerDrainingCompleteChan)
 	close(readyForRebalanceChan)
