@@ -350,6 +350,10 @@ func (k *kafka) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.C
 					panic("Failed to cancel event handling")
 				}
 			}
+			if !consumeMessages {
+				k.Logger.DebugWith("Stopping message consumption", "partition", claim.Partition())
+				break
+			}
 		}
 
 		// release the worker from whence it came
