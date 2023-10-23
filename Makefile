@@ -719,12 +719,13 @@ test-k8s-undockerized: ensure-gopath
 
 .PHONY: test-broken-undockerized
 test-broken-undockerized: ensure-gopath
-	go test \
+	${eval LIST=${shell make --no-print-directory $(LIST_TESTS_MAKE_COMMAND)}}
+	go test  \
 		-tags="test_integration,test_broken" \
 		-v \
 		-p 1 \
 		--timeout $(NUCLIO_GO_TEST_TIMEOUT) \
-		$(shell make -s $(LIST_TESTS_MAKE_COMMAND))
+		${LIST}
 
 .PHONY: test
 test: build-test

@@ -439,8 +439,6 @@ func (suite *TestSuite) GetDeployOptions(functionName string, functionPath strin
 	createFunctionOptions.FunctionConfig.Spec.Build.Path = functionPath
 	createFunctionOptions.FunctionConfig.Spec.Triggers = map[string]functionconfig.Trigger{}
 
-	createFunctionOptions.FunctionConfig.Spec.Build.TempDir = suite.CreateTempDir()
-
 	return createFunctionOptions
 }
 
