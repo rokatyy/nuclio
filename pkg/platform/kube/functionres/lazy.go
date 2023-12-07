@@ -262,6 +262,13 @@ func (lc *lazyClient) WaitAvailable(ctx context.Context,
 	var ingressReady bool
 	var timeDeploymentReady time.Time
 
+	// readiness flag for init containers
+	var initContainersReady bool
+	if len(function.Spec.InitContainers) == 0 {
+		// if there are no any init containers defined, then set to true (so we don't wait for any)
+		initContainersReady = true
+	}
+
 	counter := 0
 	waitMs := 250
 	readinessVerifierTicker := time.NewTicker(time.Duration(waitMs) * time.Millisecond)
@@ -311,6 +318,11 @@ func (lc *lazyClient) WaitAvailable(ctx context.Context,
 				waitMs = 2000
 			}
 			readinessVerifierTicker.Reset(time.Duration(waitMs) * time.Millisecond)
+
+			// waiting for init containers to be ready
+			if !initContainersReady {
+
+			}
 
 			// deployment is ready
 			// ingress is not yet (being too slow I guess, marking as unhealthy)
@@ -568,6 +580,71 @@ func (lc *lazyClient) waitFunctionDeploymentReadiness(ctx context.Context,
 	}
 
 	return errors.New("Function deployment is not ready yet"), ""
+}
+
+func (lc *lazyClient) getFunctionPods(ctx context.Context,
+	function *nuclioio.NuclioFunction) (*v1.PodList, error) {
+	labelSelector := fmt.Sprintf("%s=%s", common.NuclioResourceLabelKeyFunctionName, function.Name)
+	if functionPods, err := lc.kubeClientSet.CoreV1().Pods(function.Namespace).List(ctx,
+		metav1.ListOptions{
+			LabelSelector: labelSelector,
+		},
+	); err == nil {
+		return functionPods, nil
+	} else {
+		return nil, errors.Wrap(err, "Failed to get function deployment's pods")
+	}
+}
+
+// checkFunctionInitContainersDone checks that all function init containers are in terminated status
+// returns pair (IsDone, error)
+// Each pair explanation:
+// (true, nil) - all init containers are terminated with 0 exit code, we can proceed to other checks
+// (false, nil) - some init containers are still waiting/running, but nothing bad happened, so need to wait
+// (false, err) - we can stop waiting here since something is broken, so function won't be successfully started
+// (true, err) - impossible
+func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
+	function *nuclioio.NuclioFunction) (bool, error) {
+
+	// check that initContainers exists or that replicas number is 0
+	if len(function.Spec.InitContainers) == 0 || *function.Spec.Replicas == 0 {
+		return true, nil
+	}
+
+	functionPods, err := lc.getFunctionPods(ctx, function)
+	if err != nil {
+		return false, err
+	}
+	// since we are here, it means that we have already checked that the expected number of pods isn't zero
+	// so at least one is expected
+	if functionPods == nil {
+		return false, errors.New("No any pods found ")
+	}
+
+	// TODO: here we can also check that all pods are ready and only if they are, check init containers
+	for _, pod := range functionPods.Items {
+		for _, status := range pod.Status.InitContainerStatuses {
+
+			if status.State.Terminated != nil {
+				// TODO: add check for restart policy
+				if status.State.Terminated.ExitCode == 0 {
+					continue
+				} else {
+					return false, errors.New(fmt.Sprintf("Init container has been terminated"+
+						"with non zero error code. ExitCode: %d. Reason %s",
+						status.State.Terminated.ExitCode,
+						status.State.Terminated.Reason,
+					),
+					)
+				}
+			} else {
+				// at least one container is not terminated yet, which means that it is in waiting/running status
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+
 }
 
 func (lc *lazyClient) createOrUpdateCronJobs(ctx context.Context,
