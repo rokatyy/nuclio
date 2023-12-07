@@ -294,12 +294,20 @@ func (lc *lazyClient) WaitAvailable(ctx context.Context,
 					"functionName", function.Name)
 				return nil, functionconfig.FunctionStateReady
 			}
-
-			lc.logger.WarnWithCtx(ctx,
-				"Function available wait is cancelled due to context timeout",
-				"err", ctx.Err(),
-				"namespace", function.Namespace,
-				"functionName", function.Name)
+			if len(function.Spec.InitContainers) > 0 && !initContainersReady {
+				lc.logger.WarnWithCtx(ctx,
+					"Function available wait is cancelled due to context timeout",
+					"reason", "Init containers are not done yet",
+					"err", ctx.Err(),
+					"namespace", function.Namespace,
+					"functionName", function.Name)
+			} else {
+				lc.logger.WarnWithCtx(ctx,
+					"Function available wait is cancelled due to context timeout",
+					"err", ctx.Err(),
+					"namespace", function.Namespace,
+					"functionName", function.Name)
+			}
 			return ctx.Err(), functionconfig.FunctionStateUnhealthy
 
 		// verify availability
@@ -325,6 +333,15 @@ func (lc *lazyClient) WaitAvailable(ctx context.Context,
 				initContainersReady, err = lc.checkFunctionInitContainersDone(ctx, function)
 				if err != nil {
 					return errors.Wrap(err, "Function init containers check failed"), functionconfig.FunctionStateUnhealthy
+				}
+				if !initContainersReady {
+					continue
+				} else {
+					lc.logger.DebugWithCtx(ctx,
+						"Function init containers finished successfully",
+						"namespace", function.Namespace,
+						"name", function.Name)
+
 				}
 			}
 
@@ -611,7 +628,7 @@ func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
 	function *nuclioio.NuclioFunction) (bool, error) {
 
 	// check that initContainers exists or that replicas number is 0
-	if len(function.Spec.InitContainers) == 0 || *function.Spec.Replicas == 0 {
+	if len(function.Spec.InitContainers) == 0 {
 		return true, nil
 	}
 
