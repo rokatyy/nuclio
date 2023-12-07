@@ -321,7 +321,11 @@ func (lc *lazyClient) WaitAvailable(ctx context.Context,
 
 			// waiting for init containers to be ready
 			if !initContainersReady {
-
+				var err error
+				initContainersReady, err = lc.checkFunctionInitContainersDone(ctx, function)
+				if err != nil {
+					return errors.Wrap(err, "Function init containers check failed"), functionconfig.FunctionStateUnhealthy
+				}
 			}
 
 			// deployment is ready
@@ -618,7 +622,7 @@ func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
 	// since we are here, it means that we have already checked that the expected number of pods isn't zero
 	// so at least one is expected
 	if functionPods == nil {
-		return false, errors.New("No any pods found ")
+		return false, errors.New("No any pods found")
 	}
 
 	// TODO: here we can also check that all pods are ready and only if they are, check init containers
@@ -634,8 +638,7 @@ func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
 						"with non zero error code. ExitCode: %d. Reason %s",
 						status.State.Terminated.ExitCode,
 						status.State.Terminated.Reason,
-					),
-					)
+					))
 				}
 			} else {
 				// at least one container is not terminated yet, which means that it is in waiting/running status
