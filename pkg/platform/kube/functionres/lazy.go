@@ -301,6 +301,8 @@ func (lc *lazyClient) WaitAvailable(ctx context.Context,
 					"err", ctx.Err(),
 					"namespace", function.Namespace,
 					"functionName", function.Name)
+				return errors.New("Init containers are not done yet. Increasing readiness timeout may help"),
+					functionconfig.FunctionStateUnhealthy
 			} else {
 				lc.logger.WarnWithCtx(ctx,
 					"Function available wait is cancelled due to context timeout",
