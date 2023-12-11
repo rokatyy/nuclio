@@ -623,14 +623,24 @@ func (lc *lazyClient) getFunctionPods(ctx context.Context,
 // returns pair (IsDone, error)
 // Each pair explanation:
 // (true, nil) - all init containers are terminated with 0 exit code, we can proceed to other checks
-// (false, nil) - some init containers are still waiting/running, but nothing bad happened, so need to wait
+// (false, nil) - some init containers are still waiting/running OR required number of pods hasn't been created yet, so need to wait
 // (false, err) - we can stop waiting here since something is broken, so function won't be successfully started
 // (true, err) - impossible
 func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
-	function *nuclioio.NuclioFunction) (bool, error) {
+	function *nuclioio.NuclioFunction,
+	eventLogChan chan map[string]interface{},
+	lastCheck *time.Time) (bool, error) {
+	functionDeployment, err := lc.getFunctionDeployment(ctx, function)
+	if err != nil {
+		return false, err
+	}
+	// deployment doesn't exist yet
+	if functionDeployment == nil {
+		return false, nil
+	}
 
-	// check that initContainers exists or that replicas number is 0
-	if len(function.Spec.InitContainers) == 0 {
+	// if initContainers aren't defined or replicas number is equal to 0, skip
+	if len(function.Spec.InitContainers) == 0 || functionDeployment.Spec.Replicas == nil {
 		return true, nil
 	}
 
@@ -644,20 +654,41 @@ func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
 		return false, errors.New("No any pods found")
 	}
 
-	// TODO: here we can also check that all pods are ready and only if they are, check init containers
+	// checking that the number of pods is equal to expected replicas, otherwise checking init container
+	// statuses doesn't make sense; need to wait more time
+	if *functionDeployment.Spec.Replicas != int32(len(functionPods.Items)) {
+		return false, nil
+	}
+
+	// going thought each pod's init containers and check that they all were terminated with exit code 0
 	for _, pod := range functionPods.Items {
 		for _, status := range pod.Status.InitContainerStatuses {
 
 			if status.State.Terminated != nil {
-				// TODO: add check for restart policy
 				if status.State.Terminated.ExitCode == 0 {
 					continue
 				} else {
-					return false, errors.New(fmt.Sprintf("Init container has been terminated"+
+					errorMessage := fmt.Sprintf("Init container has been terminated"+
 						"with non zero error code. ExitCode: %d. Reason %s",
 						status.State.Terminated.ExitCode,
 						status.State.Terminated.Reason,
-					))
+					)
+					// if init container is terminated, but exit with non-zero exit code, then we check
+					// pod's restart policy and if it's `Never`, we exit with error; otherwise we wait
+					if pod.Spec.RestartPolicy == v1.RestartPolicyNever {
+						return false, errors.New(errorMessage)
+					} else {
+						// if pod's restart policy is Always/OnFailure, then init container will restart and try again
+						if lastCheck.Unix() < status.LastTerminationState.Terminated.FinishedAt.Unix() {
+							eventLogChan <- map[string]interface{}{
+								"level":   "warn",
+								"message": errorMessage,
+								"name":    "controller",
+							}
+						}
+
+						return false, nil
+					}
 				}
 			} else {
 				// at least one container is not terminated yet, which means that it is in waiting/running status
@@ -666,7 +697,6 @@ func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
 		}
 	}
 	return true, nil
-
 }
 
 func (lc *lazyClient) createOrUpdateCronJobs(ctx context.Context,
