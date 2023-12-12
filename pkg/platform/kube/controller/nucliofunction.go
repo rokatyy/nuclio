@@ -253,10 +253,32 @@ func (fo *functionOperator) CreateOrUpdate(ctx context.Context, object runtime.O
 		waitContext, cancel := context.WithDeadline(ctx, time.Now().Add(time.Duration(readinessTimeout)*time.Second))
 		defer cancel()
 
+		eventLogChan := make(chan map[string]interface{})
+		logContext, stopLogging := context.WithCancel(ctx)
+		defer stopLogging()
+
+		go func() {
+			defer close(eventLogChan)
+		loop:
+			for {
+				select {
+				case eventLog := <-eventLogChan:
+					if err := fo.logToFunctionStatus(ctx, function, eventLog); err != nil {
+						fo.logger.ErrorWith("Failed to write to function status log",
+							"error", err,
+							"function", function.Name)
+					}
+				case <-logContext.Done():
+					break loop
+				}
+			}
+		}()
+
 		// wait until the function resources are ready
 		if err, functionState := fo.functionresClient.WaitAvailable(waitContext,
 			function,
-			functionResourcesCreateOrUpdateTimestamp); err != nil {
+			functionResourcesCreateOrUpdateTimestamp,
+			eventLogChan); err != nil {
 			return fo.setFunctionError(ctx,
 				function,
 				functionState,
@@ -367,6 +389,21 @@ func (fo *functionOperator) setFunctionError(ctx context.Context,
 			"setStatusErr", errors.Cause(setStatusErr))
 	}
 
+	return err
+}
+
+func (fo *functionOperator) logToFunctionStatus(ctx context.Context,
+	function *nuclioio.NuclioFunction,
+	eventLog map[string]interface{}) error {
+	fo.logger.DebugWithCtx(ctx, "Logging to function state", "name", function.Name, "log", eventLog)
+
+	function.Status.Logs = append(function.Status.Logs, eventLog)
+
+	// try to update the function
+	_, err := fo.controller.nuclioClientSet.
+		NuclioV1beta1().
+		NuclioFunctions(function.Namespace).
+		Update(ctx, function, metav1.UpdateOptions{})
 	return err
 }
 

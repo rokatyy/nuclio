@@ -52,7 +52,7 @@ type Client interface {
 	CreateOrUpdate(context.Context, *nuclioio.NuclioFunction, string) (Resources, error)
 
 	// WaitAvailable waits until the resources are ready
-	WaitAvailable(context.Context, *nuclioio.NuclioFunction, time.Time) (error, functionconfig.FunctionState)
+	WaitAvailable(context.Context, *nuclioio.NuclioFunction, time.Time, chan map[string]interface{}) (error, functionconfig.FunctionState)
 
 	// Delete deletes resources
 	Delete(context.Context, string, string) error

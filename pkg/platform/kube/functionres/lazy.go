@@ -251,7 +251,8 @@ func (lc *lazyClient) CreateOrUpdate(ctx context.Context,
 
 func (lc *lazyClient) WaitAvailable(ctx context.Context,
 	function *nuclioio.NuclioFunction,
-	functionResourcesCreateOrUpdateTimestamp time.Time) (error, functionconfig.FunctionState) {
+	functionResourcesCreateOrUpdateTimestamp time.Time,
+	eventLogChan chan map[string]interface{}) (error, functionconfig.FunctionState) {
 
 	lc.logger.DebugWithCtx(ctx,
 		"Waiting for function resources to be available",
@@ -264,6 +265,7 @@ func (lc *lazyClient) WaitAvailable(ctx context.Context,
 
 	// readiness flag for init containers
 	var initContainersReady bool
+	var lastInitContainersCheck *time.Time
 	if len(function.Spec.InitContainers) == 0 {
 		// if there are no any init containers defined, then set to true (so we don't wait for any)
 		initContainersReady = true
@@ -285,7 +287,7 @@ func (lc *lazyClient) WaitAvailable(ctx context.Context,
 		case <-ctx.Done():
 
 			// for an edge-case where context exceeded deadline/cancelled right when resources got ready
-			if deploymentReady && ingressReady {
+			if initContainersReady && deploymentReady && ingressReady {
 
 				lc.logger.DebugWithCtx(ctx,
 					"Function reached availability right when context is cancelled",
@@ -332,7 +334,7 @@ func (lc *lazyClient) WaitAvailable(ctx context.Context,
 			// waiting for init containers to be ready
 			if !initContainersReady {
 				var err error
-				initContainersReady, err = lc.checkFunctionInitContainersDone(ctx, function)
+				initContainersReady, err = lc.checkFunctionInitContainersDone(ctx, function, eventLogChan, lastInitContainersCheck)
 				if err != nil {
 					return errors.Wrap(err, "Function init containers check failed"), functionconfig.FunctionStateUnhealthy
 				}
@@ -546,9 +548,7 @@ func (lc *lazyClient) waitFunctionDeploymentReadiness(ctx context.Context,
 	functionResourcesCreateOrUpdateTimestamp time.Time) (error, functionconfig.FunctionState) {
 
 	// get the deployment. if it doesn't exist yet, retry a bit later
-	functionDeployment, err := lc.kubeClientSet.AppsV1().
-		Deployments(function.Namespace).
-		Get(ctx, kube.DeploymentNameFromFunctionName(function.Name), metav1.GetOptions{})
+	functionDeployment, err := lc.getFunctionDeployment(ctx, function)
 	if err != nil {
 		return errors.Wrap(err, "Failed to get function deployment"), ""
 	}
@@ -603,6 +603,13 @@ func (lc *lazyClient) waitFunctionDeploymentReadiness(ctx context.Context,
 	}
 
 	return errors.New("Function deployment is not ready yet"), ""
+}
+
+// getFunctionDeployment returns function's deployment
+func (lc *lazyClient) getFunctionDeployment(ctx context.Context, function *nuclioio.NuclioFunction) (*appsv1.Deployment, error) {
+	return lc.kubeClientSet.AppsV1().
+		Deployments(function.Namespace).
+		Get(ctx, kube.DeploymentNameFromFunctionName(function.Name), metav1.GetOptions{})
 }
 
 func (lc *lazyClient) getFunctionPods(ctx context.Context,
