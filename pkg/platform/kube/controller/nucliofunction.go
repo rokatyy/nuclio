@@ -246,6 +246,21 @@ func (fo *functionOperator) CreateOrUpdate(ctx context.Context, object runtime.O
 			errors.Wrap(err, "Failed to create/update function"))
 	}
 
+	functionStatusBeforeWaitingForReadiness := function.Status.State
+	// we set status to WaitingForResourceReadiness to show that we have updated all resources, and we are waiting for their readiness
+	functionStatus := &functionconfig.Status{
+		State:          functionconfig.FunctionStateWaitingForResourceReadiness,
+		Logs:           function.Status.Logs,
+		ContainerImage: function.Spec.Image,
+	}
+
+	if err = fo.setFunctionStatus(ctx, function, functionStatus); err != nil {
+		return fo.setFunctionError(ctx,
+			function,
+			functionconfig.FunctionStateError,
+			errors.Wrap(err, fmt.Sprintf("Failed to set function status to %s", functionconfig.FunctionStateWaitingForResourceReadiness)))
+	}
+
 	// readinessTimeout would be zero when
 	// - not defined on function spec
 	// - defined 0 on platform-config
@@ -292,7 +307,7 @@ func (fo *functionOperator) CreateOrUpdate(ctx context.Context, object runtime.O
 		functionconfig.FunctionStateWaitingForScaleResourcesToZero,
 	}
 
-	if functionconfig.FunctionStateInSlice(function.Status.State, waitingStates) {
+	if functionconfig.FunctionStateInSlice(functionStatusBeforeWaitingForReadiness, waitingStates) {
 
 		var scaleEvent scalertypes.ScaleEvent
 		var finalState functionconfig.FunctionState
@@ -307,6 +322,7 @@ func (fo *functionOperator) CreateOrUpdate(ctx context.Context, object runtime.O
 		case functionconfig.FunctionStateWaitingForResourceConfiguration:
 			scaleEvent = scalertypes.ResourceUpdatedScaleEvent
 			finalState = functionconfig.FunctionStateReady
+
 		}
 
 		// NOTE: this reconstructs function status and hence omits all other function status fields

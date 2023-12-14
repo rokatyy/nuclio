@@ -638,6 +638,7 @@ func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
 	eventLogChan chan map[string]interface{},
 	lastCheck *time.Time) (bool, error) {
 	functionDeployment, err := lc.getFunctionDeployment(ctx, function)
+
 	if err != nil {
 		return false, err
 	}
@@ -667,18 +668,29 @@ func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
 		return false, nil
 	}
 
+	ready := true
+
 	// going thought each pod's init containers and check that they all were terminated with exit code 0
 	for _, pod := range functionPods.Items {
-		for _, status := range pod.Status.InitContainerStatuses {
+		for _, initContainer := range pod.Status.InitContainerStatuses {
 
-			if status.State.Terminated != nil {
-				if status.State.Terminated.ExitCode == 0 {
+			if initContainer.State.Terminated != nil {
+				if initContainer.State.Terminated.ExitCode == 0 {
+					infoMessage := fmt.Sprintf("Init container has been successfully terminated."+
+						"Init container: %s. Pod: %s", initContainer.Name, pod.Name)
+					if lastCheck.Unix() < initContainer.LastTerminationState.Terminated.FinishedAt.Unix() {
+						eventLogChan <- map[string]interface{}{
+							"level":   "info",
+							"message": infoMessage,
+							"name":    "controller",
+						}
+					}
 					continue
 				} else {
 					errorMessage := fmt.Sprintf("Init container has been terminated"+
 						"with non zero error code. ExitCode: %d. Reason %s",
-						status.State.Terminated.ExitCode,
-						status.State.Terminated.Reason,
+						initContainer.State.Terminated.ExitCode,
+						initContainer.State.Terminated.Reason,
 					)
 					// if init container is terminated, but exit with non-zero exit code, then we check
 					// pod's restart policy and if it's `Never`, we exit with error; otherwise we wait
@@ -686,24 +698,23 @@ func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
 						return false, errors.New(errorMessage)
 					} else {
 						// if pod's restart policy is Always/OnFailure, then init container will restart and try again
-						if lastCheck.Unix() < status.LastTerminationState.Terminated.FinishedAt.Unix() {
+						if lastCheck.Unix() < initContainer.LastTerminationState.Terminated.FinishedAt.Unix() {
 							eventLogChan <- map[string]interface{}{
 								"level":   "warn",
 								"message": errorMessage,
 								"name":    "controller",
 							}
 						}
-
-						return false, nil
+						ready = false
 					}
 				}
 			} else {
 				// at least one container is not terminated yet, which means that it is in waiting/running status
-				return false, nil
+				ready = false
 			}
 		}
 	}
-	return true, nil
+	return ready, nil
 }
 
 func (lc *lazyClient) createOrUpdateCronJobs(ctx context.Context,

@@ -812,6 +812,7 @@ const (
 	FunctionStateUnhealthy                        FunctionState = "unhealthy"
 	FunctionStateScaledToZero                     FunctionState = "scaledToZero"
 	FunctionStateImported                         FunctionState = "imported"
+	FunctionStateWaitingForResourceReadiness      FunctionState = "waitingForResourceReadiness"
 )
 
 func FunctionStateInSlice(functionState FunctionState, functionStates []FunctionState) bool {

@@ -1905,7 +1905,7 @@ func (p *Platform) validateInitContainersSpec(functionConfig *functionconfig.Con
 
 func (p *Platform) validateContainerSpec(container *v1.Container) error {
 	if container.Name == "" {
-		return nuclio.NewErrBadRequest(fmt.Sprintf("Container name must be provided"))
+		return nuclio.NewErrBadRequest("Container name must be provided")
 	}
 
 	if container.Image == "" {
