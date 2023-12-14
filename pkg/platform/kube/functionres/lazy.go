@@ -678,7 +678,7 @@ func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
 				if initContainer.State.Terminated.ExitCode == 0 {
 					infoMessage := fmt.Sprintf("Init container has been successfully terminated."+
 						"Init container: %s. Pod: %s", initContainer.Name, pod.Name)
-					if lastCheck.Unix() < initContainer.LastTerminationState.Terminated.FinishedAt.Unix() {
+					if lastCheck == nil || lastCheck.Unix() < initContainer.LastTerminationState.Terminated.FinishedAt.Unix() {
 						eventLogChan <- map[string]interface{}{
 							"level":   "info",
 							"message": infoMessage,
@@ -698,7 +698,7 @@ func (lc *lazyClient) checkFunctionInitContainersDone(ctx context.Context,
 						return false, errors.New(errorMessage)
 					} else {
 						// if pod's restart policy is Always/OnFailure, then init container will restart and try again
-						if lastCheck.Unix() < initContainer.LastTerminationState.Terminated.FinishedAt.Unix() {
+						if lastCheck == nil || lastCheck.Unix() < initContainer.LastTerminationState.Terminated.FinishedAt.Unix() {
 							eventLogChan <- map[string]interface{}{
 								"level":   "warn",
 								"message": errorMessage,
