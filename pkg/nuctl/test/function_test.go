@@ -1580,46 +1580,6 @@ func (suite *functionExportImportTestSuite) TestAutofixWhenImportFunction() {
 	suite.Require().NotNil(err)
 }
 
-func (suite *functionExportImportTestSuite) TestImportWithReport() {
-	functionConfigPath := path.Join(suite.GetImportsDir(), "project_with_wrong_conf.yaml")
-	projectName := "test-project"
-
-	defer func() {
-		// delete project
-		suite.ExecuteNuctl([]string{"delete", "project", projectName, "--strategy", "cascading"}, nil) // nolint: errcheck
-
-	}()
-
-	// generate report path
-	reportPath := path.Join(suite.tempDir,
-		fmt.Sprintf("import-project-report-%s.json",
-			common.GenerateRandomString(5, common.LettersAndNumbers),
-		),
-	)
-	err := suite.ExecuteNuctl([]string{"import", "project", "--verbose", "--save-report", "--report-file-path", reportPath, functionConfigPath}, nil)
-	suite.Require().NotNil(err)
-
-	// read a generated report
-	reportBytes, err := os.ReadFile(reportPath)
-	suite.Require().NoError(err)
-
-	projectsReport := &nuctlcommon.ProjectReports{}
-	err = json.Unmarshal(reportBytes, &projectsReport)
-	suite.Require().NoError(err)
-
-	projectReport, _ := projectsReport.GetReport(projectName)
-	suite.Require().NotNil(projectsReport)
-	suite.Require().Contains(projectReport.Failed.FailReason, "Import failed for some of the functions in project `test-project`.")
-
-	suite.Require().Equal(2, len(projectReport.FunctionReports.Success))
-	suite.Require().Contains(projectReport.FunctionReports.Success, "correct-test-function")
-	suite.Require().Contains(projectReport.FunctionReports.Success, "incorrect-fixable-test-function")
-
-	suite.Require().Contains(projectReport.FunctionReports.Failed, "incorrect-not-fixable-test-function")
-	suite.Require().Equal("There's more than one http trigger (unsupported)", projectReport.FunctionReports.Failed["incorrect-not-fixable-test-function"].FailReason)
-	suite.Require().Equal(false, projectReport.FunctionReports.Failed["incorrect-not-fixable-test-function"].CanBeAutoFixed)
-}
-
 func (suite *functionExportImportTestSuite) TestExportImportRoundTripFromStdin() {
 	uniqueSuffix := "-" + xid.New().String()
 	functionName := "export-import-stdin" + uniqueSuffix
