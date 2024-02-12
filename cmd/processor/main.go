@@ -19,6 +19,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"sort"
 
@@ -29,9 +31,13 @@ import (
 	"github.com/v3io/version-go"
 
 	_ "github.com/nuclio/nuclio/pkg/processor/webadmin/resource"
+	_ "net/http/pprof"
 )
 
 func run() error {
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 	configPath := flag.String("config", "/etc/nuclio/config/processor/processor.yaml", "Path of configuration file")
 	platformConfigPath := flag.String("platform-config", "/etc/nuclio/config/platform/platform.yaml", "Path of platform configuration file")
 	listRuntimes := flag.Bool("list-runtimes", false, "Show runtimes and exit")
