@@ -342,7 +342,7 @@ func (suite *lazyTestSuite) TestNoChanges() {
 	defaultHTTPTrigger.Attributes = map[string]interface{}{
 		"ingresses": map[string]interface{}{
 			"0": map[string]interface{}{
-				"hostTemplate": "@nuclio.fromDefault",
+				"hostTemplate": common.DefaultIngressHostTemplate,
 				"paths":        []string{"/"},
 			},
 		},
@@ -839,7 +839,7 @@ func (suite *lazyTestSuite) TestFastFailOnAutoScalerEvents() {
 			suite.Require().NoError(err)
 
 			// call resolveFailFast
-			err = suite.client.resolveFailFast(suite.ctx, &podsList, time.Now())
+			_, err = suite.client.resolveFailFast(suite.ctx, &podsList, time.Now())
 			if testCase.expectedError {
 				suite.Require().Error(err)
 			} else {

@@ -76,29 +76,25 @@ type Platform struct {
 	ImageNamePrefixTemplate string
 	DefaultNamespace        string
 	OpaClient               opa.Client
-	Scrubber                *functionconfig.Scrubber
+	FunctionScrubber        *functionconfig.Scrubber
 }
 
 func NewPlatform(parentLogger logger.Logger,
-	platform platform.Platform,
+	platformInstance platform.Platform,
 	platformConfiguration *platformconfig.Config,
 	defaultNamespace string) (*Platform, error) {
 	var err error
 
 	newPlatform := &Platform{
 		Logger:           parentLogger.GetChild("platform"),
-		platform:         platform,
+		platform:         platformInstance,
 		Config:           platformConfiguration,
 		DeployLogStreams: &sync.Map{},
-		Scrubber: functionconfig.NewScrubber(
-			platformConfiguration.SensitiveFields.CompileSensitiveFieldsRegex(),
-			nil, /* kubeClientSet */
-		),
 		DefaultNamespace: defaultNamespace,
 	}
 
 	// create invoker
-	newPlatform.invoker, err = newInvoker(newPlatform.Logger, platform)
+	newPlatform.invoker, err = newInvoker(newPlatform.Logger, platformInstance)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to create invoker")
 	}
@@ -168,14 +164,16 @@ func (ap *Platform) HandleDeployFunction(ctx context.Context,
 
 		// if the function is updated, it might have scrubbed data in the spec that the builder requires,
 		// so we need to restore it before building
-		restoredFunctionConfig, err := ap.Scrubber.RestoreFunctionConfig(ctx,
-			&createFunctionOptions.FunctionConfig,
-			ap.platform.GetName(),
-			ap.GetFunctionSecretMap)
-		if err != nil {
-			return nil, errors.Wrap(err, "Failed to restore function config")
+		if functionScrubber := ap.platform.GetFunctionScrubber(); functionScrubber != nil {
+			restoredFunctionConfig, err := functionScrubber.RestoreFunctionConfig(ctx,
+				&createFunctionOptions.FunctionConfig,
+				ap.platform.GetName())
+
+			if err != nil {
+				return nil, errors.Wrap(err, "Failed to restore function config")
+			}
+			createFunctionOptions.FunctionConfig = *restoredFunctionConfig
 		}
-		createFunctionOptions.FunctionConfig = *restoredFunctionConfig
 
 		buildResult, buildErr = ap.platform.CreateFunctionBuild(ctx,
 			&platform.CreateFunctionBuildOptions{
@@ -273,6 +271,14 @@ func (ap *Platform) EnrichFunctionConfig(ctx context.Context, functionConfig *fu
 		functionConfig.Spec.Runtime = "python:3.9"
 	}
 
+	if functionConfig.Spec.DisableDefaultHTTPTrigger == nil {
+		ap.Logger.DebugWithCtx(ctx,
+			"Enriching disable default http trigger flag",
+			"functionName", functionConfig.Meta.Name,
+			"disableDefaultHttpTrigger", ap.Config.DisableDefaultHTTPTrigger)
+		functionConfig.Spec.DisableDefaultHTTPTrigger = &ap.Config.DisableDefaultHTTPTrigger
+	}
+
 	// enrich triggers
 	if err := ap.enrichTriggers(ctx, functionConfig); err != nil {
 		return errors.Wrap(err, "Failed enriching triggers")
@@ -285,14 +291,6 @@ func (ap *Platform) EnrichFunctionConfig(ctx context.Context, functionConfig *fu
 
 	if err := ap.enrichVolumes(functionConfig); err != nil {
 		return errors.Wrap(err, "Failed enriching volumes")
-	}
-
-	if functionConfig.Spec.DisableDefaultHTTPTrigger == nil {
-		ap.Logger.DebugWithCtx(ctx,
-			"Enriching disable default http trigger flag",
-			"functionName", functionConfig.Meta.Name,
-			"disableDefaultHttpTrigger", ap.Config.DisableDefaultHTTPTrigger)
-		functionConfig.Spec.DisableDefaultHTTPTrigger = &ap.Config.DisableDefaultHTTPTrigger
 	}
 
 	ap.enrichEnvVars(functionConfig)
@@ -333,7 +331,7 @@ func (ap *Platform) enrichDefaultHTTPTrigger(functionConfig *functionconfig.Conf
 	if len(functionconfig.GetTriggersByKind(functionConfig.Spec.Triggers, "http")) > 0 {
 		return
 	}
-	if ap.Config.DisableDefaultHTTPTrigger {
+	if functionConfig.Spec.DisableDefaultHTTPTrigger != nil && *functionConfig.Spec.DisableDefaultHTTPTrigger {
 		ap.Logger.Debug("Skipping default http trigger creation")
 		return
 	}
@@ -450,7 +448,8 @@ func (ap *Platform) ValidateFunctionConfig(ctx context.Context, functionConfig *
 		return errors.Wrap(err, "Min max replicas validation failed")
 	}
 
-	if err := common.ValidateNodeSelector(functionConfig.Spec.NodeSelector); err != nil {
+	// validate function node selector
+	if err := common.ValidateLabels(functionConfig.Spec.NodeSelector); err != nil {
 		return errors.Wrap(err, "Node selector validation failed")
 	}
 
@@ -472,11 +471,6 @@ func (ap *Platform) ValidateFunctionConfig(ctx context.Context, functionConfig *
 
 	if err := ap.validateAutoScaleMetrics(functionConfig); err != nil {
 		return errors.Wrap(err, "Auto scale metrics validation failed")
-	}
-
-	// TODO: remove warning when avatar is support is removed in 1.13
-	if functionConfig.Spec.Avatar != "" {
-		ap.Logger.WarnWithCtx(ctx, "Avatar is deprecated and will not be supported in version 1.13")
 	}
 
 	return nil
@@ -798,6 +792,13 @@ func (ap *Platform) EnrichCreateProjectConfig(createProjectOptions *platform.Cre
 		createProjectOptions.ProjectConfig.Spec.Owner = createProjectOptions.AuthSession.GetUsername()
 	}
 
+	if ap.Config.ProjectsLeader != nil && createProjectOptions.RequestOrigin == ap.Config.ProjectsLeader.Kind {
+
+		// to align with the leaders (that allow invalid k8s labels), we just ignore the project's invalid labels
+		// instead of failing validation later on
+		createProjectOptions.ProjectConfig.Meta.Labels = common.FilterInvalidLabels(createProjectOptions.ProjectConfig.Meta.Labels)
+	}
+
 	return nil
 }
 
@@ -808,8 +809,14 @@ func (ap *Platform) ValidateProjectConfig(projectConfig *platform.ProjectConfig)
 		return nuclio.NewErrBadRequest("Project name cannot be empty")
 	}
 
-	if err := common.ValidateNodeSelector(projectConfig.Spec.DefaultFunctionNodeSelector); err != nil {
-		return nuclio.WrapErrBadRequest(err)
+	// validate project labels
+	if err := common.ValidateLabels(projectConfig.Meta.Labels); err != nil {
+		return errors.Wrap(err, "Project labels validation failed")
+	}
+
+	// validate default node selector
+	if err := common.ValidateLabels(projectConfig.Spec.DefaultFunctionNodeSelector); err != nil {
+		return errors.Wrap(err, "Default function node selector validation failed")
 	}
 
 	// project name should adhere Kubernetes label restrictions
@@ -1338,40 +1345,6 @@ func (ap *Platform) QueryOPAMultipleResources(ctx context.Context,
 	return ap.queryOPAPermissionsMultiResources(ctx, resources, action, permissionOptions)
 }
 
-// GetFunctionSecrets returns all the function's secrets
-func (ap *Platform) GetFunctionSecrets(ctx context.Context, functionName, functionNamespace string) ([]platform.FunctionSecret, error) {
-	return nil, nil
-}
-
-// GetFunctionSecretMap returns a map of function sensitive data
-func (ap *Platform) GetFunctionSecretMap(ctx context.Context, functionName, functionNamespace string) (map[string]string, error) {
-
-	// get existing function secret
-	ap.Logger.DebugWithCtx(ctx,
-		"Getting function secret", "functionName",
-		functionName, "functionNamespace", functionNamespace)
-	functionSecretData, err := ap.platform.GetFunctionSecretData(ctx, functionName, functionNamespace)
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to get function secret")
-	}
-
-	// if secret exists, get the data
-	if functionSecretData != nil {
-		functionSecretMap, err := ap.Scrubber.DecodeSecretData(functionSecretData)
-		if err != nil {
-			return nil, errors.Wrap(err, "Failed to decode function secret data")
-		}
-		return functionSecretMap, nil
-	}
-
-	// secret doesn't exist
-	ap.Logger.DebugWithCtx(ctx,
-		"Function secret doesn't exist",
-		"functionName", functionName,
-		"functionNamespace", functionNamespace)
-	return nil, nil
-}
-
 func (ap *Platform) functionBuildRequired(functionConfig *functionconfig.Config) (bool, error) {
 
 	// if neverBuild was passed explicitly don't build
@@ -1648,11 +1621,11 @@ func (ap *Platform) validateTriggers(functionConfig *functionconfig.Config) erro
 		}
 
 		// no more workers than limitation allows
-		if triggerInstance.MaxWorkers > trigger.MaxWorkersLimit {
-			return nuclio.NewErrBadRequest(fmt.Sprintf("MaxWorkers value for %s trigger (%d) exceeds the limit of %d",
+		if triggerInstance.NumWorkers > trigger.NumWorkersLimit {
+			return nuclio.NewErrBadRequest(fmt.Sprintf("NumWorkers value for %s trigger (%d) exceeds the limit of %d",
 				triggerKey,
-				triggerInstance.MaxWorkers,
-				trigger.MaxWorkersLimit))
+				triggerInstance.NumWorkers,
+				trigger.NumWorkersLimit))
 		}
 
 		// no more than one http trigger is allowed
@@ -1763,15 +1736,24 @@ func (ap *Platform) enrichTriggers(ctx context.Context, functionConfig *function
 			triggerInstance.Name = triggerName
 		}
 
+		// replace deprecated MaxWorkers with NumWorkers
+		// TODO: remove in 1.15.x
+		// nolint: staticcheck
+		if triggerInstance.NumWorkers == 0 && triggerInstance.MaxWorkers != 0 {
+			ap.Logger.WarnWithCtx(ctx, "MaxWorkers is deprecated and will be removed in v1.15.x, use NumWorkers instead")
+			triggerInstance.NumWorkers = triggerInstance.MaxWorkers
+		}
+
 		// ensure having max workers
 		if common.StringInSlice(triggerInstance.Kind, []string{"http", "v3ioStream"}) {
-			if triggerInstance.MaxWorkers == 0 {
-				triggerInstance.MaxWorkers = 1
+			if triggerInstance.NumWorkers == 0 {
+				triggerInstance.NumWorkers = 1
 			}
 		}
 
 		functionConfig.Spec.Triggers[triggerName] = triggerInstance
 	}
+
 	return nil
 }
 

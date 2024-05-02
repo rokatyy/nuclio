@@ -210,7 +210,7 @@ func (p *Processor) Start() error {
 	// handles system signals (for now only SIGTERM)
 	go p.handleSignals()
 
-	p.logger.DebugWith("Starting triggers", "triggers", p.triggers)
+	p.logger.Debug("Starting triggers")
 
 	// iterate over all triggers and start them
 	for _, triggerInstance := range p.triggers {
@@ -219,6 +219,10 @@ func (p *Processor) Start() error {
 				"kind", triggerInstance.GetKind(),
 				"err", err.Error())
 			return errors.Wrap(err, "Failed to start trigger")
+		} else {
+			p.logger.DebugWith("Trigger successfully started",
+				"kind", triggerInstance.GetKind(),
+				"name", triggerInstance.GetName())
 		}
 	}
 
@@ -315,7 +319,7 @@ func (p *Processor) readConfiguration(configurationPath string) (*processor.Conf
 func (p *Processor) restoreFunctionConfig(config *functionconfig.Config) (*functionconfig.Config, error) {
 
 	// initialize scrubber, we don't care about sensitive fields and kubeClientSet
-	scrubber := functionconfig.NewScrubber(nil, nil)
+	scrubber := functionconfig.NewScrubber(p.logger, nil, nil)
 
 	secretsMap, err := p.getSecretsMap(scrubber)
 	if err != nil {
@@ -333,7 +337,7 @@ func (p *Processor) restoreFunctionConfig(config *functionconfig.Config) (*funct
 		return nil, errors.Wrap(err, "Failed to restore function config")
 	}
 
-	return restoredFunctionConfig, nil
+	return functionconfig.GetFunctionConfigFromInterface(restoredFunctionConfig), nil
 }
 
 func (p *Processor) getSecretsMap(scrubber *functionconfig.Scrubber) (map[string]string, error) {

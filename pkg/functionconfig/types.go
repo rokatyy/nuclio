@@ -70,7 +70,7 @@ type Trigger struct {
 	Kind                                  string            `json:"kind"`
 	Name                                  string            `json:"name"`
 	Disabled                              bool              `json:"disabled,omitempty"`
-	MaxWorkers                            int               `json:"maxWorkers,omitempty"`
+	NumWorkers                            int               `json:"numWorkers,omitempty"`
 	URL                                   string            `json:"url,omitempty"`
 	Paths                                 []string          `json:"paths,omitempty"`
 	Username                              string            `json:"username,omitempty"`
@@ -90,6 +90,10 @@ type Trigger struct {
 
 	// General attributes
 	Attributes map[string]interface{} `json:"attributes,omitempty"`
+
+	// Deprecated: MaxWorkers is replaced by NumWorkers, and will be removed in 1.15.x
+	// TODO: remove in 1.15.x
+	MaxWorkers int `json:"maxWorkers,omitempty"`
 }
 
 type ExplicitAckMode string
@@ -229,7 +233,7 @@ func GetDefaultHTTPTrigger() Trigger {
 	return Trigger{
 		Kind:       "http",
 		Name:       "default-http",
-		MaxWorkers: 1,
+		NumWorkers: 1,
 	}
 }
 
@@ -415,9 +419,6 @@ type Spec struct {
 	// InitContainers are specialized containers that run before app containers in a Pod
 	// Init containers can contain utilities or setup scripts not present in an app image
 	InitContainers []*v1.Container `json:"initContainers,omitempty"`
-
-	// Deprecated - remove in 1.13.x
-	Avatar string `json:"avatar,omitempty"`
 }
 
 type RunOnPreemptibleNodeMode string
@@ -575,6 +576,13 @@ func ShouldSkipBuild(annotations map[string]string) bool {
 type Config struct {
 	Meta Meta `json:"metadata,omitempty"`
 	Spec Spec `json:"spec,omitempty"`
+}
+
+func GetFunctionConfigFromInterface(functionConfigInterface interface{}) *Config {
+	if functionConfig, ok := functionConfigInterface.(*Config); ok {
+		return functionConfig
+	}
+	return nil
 }
 
 // NewConfig creates a new configuration structure

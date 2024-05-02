@@ -601,10 +601,10 @@ func (lc *lazyClient) waitFunctionDeploymentReadiness(ctx context.Context,
 		}
 
 		// fail-fast mechanism
-		if err := lc.resolveFailFast(ctx,
+		if failedStatus, err := lc.resolveFailFast(ctx,
 			podsList,
 			functionResourcesCreateOrUpdateTimestamp); err != nil {
-			return errors.Wrapf(err, "NuclioFunction deployment failed"), functionconfig.FunctionStateError
+			return errors.Wrapf(err, "NuclioFunction deployment failed"), failedStatus
 		}
 	}
 
@@ -1121,34 +1121,7 @@ func (lc *lazyClient) createOrUpdateDeployment(ctx context.Context,
 			}
 		}
 
-		// create init containers if provided
-		if len(function.Spec.InitContainers) > 0 {
-			deploymentSpec.Template.Spec.InitContainers = make([]v1.Container, 0, len(function.Spec.InitContainers))
-			for _, initContainer := range function.Spec.InitContainers {
-				lc.logger.DebugWithCtx(ctx,
-					"Creating init container",
-					"functionName", function.Name,
-					"initContainer", initContainer.Name)
-				lc.platformConfigurationProvider.GetPlatformConfiguration().EnrichSupplementaryContainerResources(ctx,
-					lc.logger,
-					&initContainer.Resources)
-				initContainer.VolumeMounts = volumeMounts
-				deploymentSpec.Template.Spec.InitContainers = append(deploymentSpec.Template.Spec.InitContainers, *initContainer)
-			}
-		}
-
-		// create sidecars if provided
-		for _, sidecarSpec := range function.Spec.Sidecars {
-			lc.logger.DebugWithCtx(ctx,
-				"Creating sidecar container",
-				"functionName", function.Name,
-				"sidecarName", sidecarSpec.Name)
-			lc.platformConfigurationProvider.GetPlatformConfiguration().EnrichSupplementaryContainerResources(ctx,
-				lc.logger,
-				&sidecarSpec.Resources)
-			sidecarSpec.VolumeMounts = volumeMounts
-			deploymentSpec.Template.Spec.Containers = append(deploymentSpec.Template.Spec.Containers, *sidecarSpec)
-		}
+		lc.populateSupplementaryContainers(ctx, function, &deploymentSpec, volumeMounts)
 
 		deployment := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
@@ -1225,6 +1198,8 @@ func (lc *lazyClient) createOrUpdateDeployment(ctx context.Context,
 			}
 		}
 
+		lc.populateSupplementaryContainers(ctx, function, &deployment.Spec, volumeMounts)
+
 		// enrich deployment spec with default fields that were passed inside the platform configuration
 		// performed on update too, in case the platform config has been modified after the creation of this deployment
 		if err := lc.enrichDeploymentFromPlatformConfiguration(function, deployment, method); err != nil {
@@ -1246,6 +1221,47 @@ func (lc *lazyClient) createOrUpdateDeployment(ctx context.Context,
 	}
 
 	return resource.(*appsv1.Deployment), err
+}
+
+func (lc *lazyClient) populateSupplementaryContainers(ctx context.Context,
+	function *nuclioio.NuclioFunction,
+	deploymentSpec *appsv1.DeploymentSpec,
+	volumeMounts []v1.VolumeMount) {
+
+	// create init containers if provided
+	if len(function.Spec.InitContainers) > 0 {
+		deploymentSpec.Template.Spec.InitContainers = make([]v1.Container, 0, len(function.Spec.InitContainers))
+		for _, initContainer := range function.Spec.InitContainers {
+			lc.logger.DebugWithCtx(ctx,
+				"Creating init container",
+				"functionName", function.Name,
+				"initContainer", initContainer.Name)
+			lc.platformConfigurationProvider.GetPlatformConfiguration().EnrichSupplementaryContainerResources(ctx,
+				lc.logger,
+				&initContainer.Resources)
+			initContainer.VolumeMounts = volumeMounts
+
+			deploymentSpec.Template.Spec.InitContainers = append(deploymentSpec.Template.Spec.InitContainers, *initContainer)
+		}
+	}
+
+	// remove the sidecar containers from the container list if any, and keep the first container
+	// we will add the sidecars later
+	deploymentSpec.Template.Spec.Containers = deploymentSpec.Template.Spec.Containers[:1]
+
+	// create sidecars if provided
+	for _, sidecarSpec := range function.Spec.Sidecars {
+		lc.logger.DebugWithCtx(ctx,
+			"Creating sidecar container",
+			"functionName", function.Name,
+			"sidecarName", sidecarSpec.Name)
+		lc.platformConfigurationProvider.GetPlatformConfiguration().EnrichSupplementaryContainerResources(ctx,
+			lc.logger,
+			&sidecarSpec.Resources)
+		sidecarSpec.VolumeMounts = volumeMounts
+
+		deploymentSpec.Template.Spec.Containers = append(deploymentSpec.Template.Spec.Containers, *sidecarSpec)
+	}
 }
 
 func (lc *lazyClient) resolveDeploymentStrategy(function *nuclioio.NuclioFunction) appsv1.DeploymentStrategyType {
@@ -2855,7 +2871,7 @@ func (lc *lazyClient) getMetricResourceByName(resourceName string) v1.ResourceNa
 
 func (lc *lazyClient) resolveFailFast(ctx context.Context,
 	podsList *v1.PodList,
-	functionResourcesCreateOrUpdateTimestamp time.Time) error {
+	functionResourcesCreateOrUpdateTimestamp time.Time) (functionconfig.FunctionState, error) {
 
 	var pods []v1.Pod
 	for _, pod := range podsList.Items {
@@ -2879,7 +2895,7 @@ func (lc *lazyClient) resolveFailFast(ctx context.Context,
 				// check if the pod is on a crashLoopBackoff
 				if containerStatus.State.Waiting.Reason == "CrashLoopBackOff" {
 
-					return errors.Errorf("NuclioFunction pod (%s) is in a crash loop", pod.Name)
+					return functionconfig.FunctionStateUnhealthy, errors.Errorf("NuclioFunction pod (%s) is in a crash loop", pod.Name)
 				}
 			}
 		}
@@ -2928,12 +2944,12 @@ func (lc *lazyClient) resolveFailFast(ctx context.Context,
 		}
 	}
 	if err := errGroup.Wait(); err != nil {
-		return errors.Wrap(err, "Failed to verify at least one pod schedulability")
+		return functionconfig.FunctionStateUnhealthy, errors.Wrap(err, "Failed to verify at least one pod schedulability")
 	}
 	if scaleUpOccurred {
 		lc.logger.DebugWithCtx(ctx, "Pod triggered a scale up. Still waiting for deployment to be available")
 	}
-	return nil
+	return "", nil
 }
 
 func (lc *lazyClient) isPodAutoScaledUp(ctx context.Context, pod v1.Pod) (bool, error) {

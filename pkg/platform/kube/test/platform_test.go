@@ -25,8 +25,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -571,7 +573,6 @@ func (suite *DeployFunctionTestSuite) TestAssigningFunctionPodToNodes() {
 func (suite *DeployFunctionTestSuite) TestAugmentedConfig() {
 	runAsUserID := int64(1000)
 	runAsGroupID := int64(2000)
-	functionAvatar := "demo-avatar"
 	functionLabels := map[string]string{
 		"my-function": "is-labeled",
 	}
@@ -580,11 +581,7 @@ func (suite *DeployFunctionTestSuite) TestAugmentedConfig() {
 			LabelSelector: metav1.LabelSelector{
 				MatchLabels: functionLabels,
 			},
-			FunctionConfig: functionconfig.Config{
-				Spec: functionconfig.Spec{
-					Avatar: functionAvatar,
-				},
-			},
+			FunctionConfig: functionconfig.Config{},
 			Kubernetes: platformconfig.Kubernetes{
 				Deployment: &appsv1.Deployment{
 					Spec: appsv1.DeploymentSpec{
@@ -613,9 +610,6 @@ func (suite *DeployFunctionTestSuite) TestAugmentedConfig() {
 		suite.GetResourceAndUnmarshal("deployment",
 			kube.DeploymentNameFromFunctionName(functionName),
 			deploymentInstance)
-
-		// ensure function spec was enriched
-		suite.Require().Equal(functionAvatar, functionInstance.Spec.Avatar)
 
 		// ensure function deployment was enriched
 		suite.Require().NotNil(deploymentInstance.Spec.Template.Spec.SecurityContext.RunAsUser)
@@ -658,7 +652,7 @@ func (suite *DeployFunctionTestSuite) TestDefaultHTTPTrigger() {
 	customTrigger := functionconfig.Trigger{
 		Kind:       "http",
 		Name:       "custom-trigger",
-		MaxWorkers: 3,
+		NumWorkers: 3,
 	}
 	createCustomTriggerFunctionOptions.FunctionConfig.Spec.Triggers = map[string]functionconfig.Trigger{
 		customTrigger.Name: customTrigger,
@@ -718,7 +712,7 @@ func (suite *DeployFunctionTestSuite) TestHTTPTriggerServiceTypes() {
 	customTrigger := functionconfig.Trigger{
 		Kind:       "http",
 		Name:       "custom-trigger",
-		MaxWorkers: 1,
+		NumWorkers: 1,
 		Attributes: map[string]interface{}{
 			"serviceType": v1.ServiceTypeNodePort,
 		},
@@ -743,7 +737,7 @@ func (suite *DeployFunctionTestSuite) TestHTTPTriggerServiceTypes() {
 	nilServiceTypeTrigger := functionconfig.Trigger{
 		Kind:       "http",
 		Name:       "nil-service-type-trigger",
-		MaxWorkers: 1,
+		NumWorkers: 1,
 		Attributes: triggerAttributes,
 	}
 	nilServiceTypeFunctionOptions.FunctionConfig.Spec.Triggers = map[string]functionconfig.Trigger{
@@ -767,7 +761,7 @@ func (suite *DeployFunctionTestSuite) TestCreateFunctionWithIngress() {
 		"customTrigger": {
 			Kind:       "http",
 			Name:       "customTrigger",
-			MaxWorkers: 3,
+			NumWorkers: 3,
 			Attributes: map[string]interface{}{
 				"ingresses": map[string]interface{}{
 					"someKey": map[string]interface{}{
@@ -811,7 +805,7 @@ func (suite *DeployFunctionTestSuite) TestCreateFunctionWithTemplatedIngress() {
 		"customTrigger": {
 			Kind:       "http",
 			Name:       "customTrigger",
-			MaxWorkers: 3,
+			NumWorkers: 3,
 			Attributes: map[string]interface{}{
 				"ingresses": map[string]interface{}{
 					"someKey": map[string]interface{}{
@@ -878,7 +872,7 @@ func (suite *DeployFunctionTestSuite) TestFunctionImageNameInStatus() {
 }
 
 func (suite *DeployFunctionTestSuite) TestFunctionSecretCreation() {
-	scrubber := functionconfig.NewScrubber(nil, nil)
+	scrubber := suite.Platform.GetFunctionScrubber()
 
 	functionName := "func-with-secret"
 	password := "1234"
@@ -901,12 +895,11 @@ func (suite *DeployFunctionTestSuite) TestFunctionSecretCreation() {
 	suite.DeployFunction(createFunctionOptions, func(deployResult *platform.CreateFunctionResult) bool {
 
 		// get function secrets
-		secrets, err := suite.Platform.GetFunctionSecrets(suite.Ctx, functionName, suite.Namespace)
+		secrets, err := scrubber.GetObjectSecrets(suite.Ctx, functionName, suite.Namespace)
 		suite.Require().NoError(err)
 		suite.Require().Len(secrets, 1)
 
 		for _, secret := range secrets {
-			secret := secret.Kubernetes
 			if !strings.HasPrefix(secret.Name, functionconfig.NuclioFlexVolumeSecretNamePrefix) {
 
 				// decode data from secret
@@ -981,7 +974,7 @@ func (suite *DeployFunctionTestSuite) TestSecretEnvVarNotPresent() {
 }
 
 func (suite *DeployFunctionTestSuite) TestMultipleVolumeSecrets() {
-	scrubber := functionconfig.NewScrubber(nil, nil)
+	scrubber := suite.Platform.GetFunctionScrubber()
 
 	functionName := "func-with-multiple-volumes"
 	accessKey := "1234"
@@ -1042,22 +1035,21 @@ func (suite *DeployFunctionTestSuite) TestMultipleVolumeSecrets() {
 	suite.DeployFunctionExpectError(createFunctionOptions, func(deployResult *platform.CreateFunctionResult) bool { // nolint: errcheck
 
 		// get function secrets
-		secrets, err := suite.Platform.GetFunctionSecrets(suite.Ctx, functionName, suite.Namespace)
+		secrets, err := scrubber.GetObjectSecrets(suite.Ctx, functionName, suite.Namespace)
 		suite.Require().NoError(err)
 		suite.Require().Len(secrets, 3)
 
 		for _, secret := range secrets {
-			kubeSecret := secret.Kubernetes
 			switch {
-			case !strings.HasPrefix(kubeSecret.Name, functionconfig.NuclioFlexVolumeSecretNamePrefix):
+			case !strings.HasPrefix(secret.Name, functionconfig.NuclioFlexVolumeSecretNamePrefix):
 				functionSecretCounter++
 
 				// decode data from secret
-				decodedSecretData, err := scrubber.DecodeSecretData(kubeSecret.Data)
+				decodedSecretData, err := scrubber.DecodeSecretData(secret.Data)
 				suite.Require().NoError(err)
 				suite.Logger.DebugWithCtx(suite.Ctx,
 					"Got function secret",
-					"secretData", kubeSecret.Data,
+					"secretData", secret.Data,
 					"decodedSecretData", decodedSecretData)
 
 				// verify accessKey is in secret data
@@ -1067,16 +1059,16 @@ func (suite *DeployFunctionTestSuite) TestMultipleVolumeSecrets() {
 					}
 				}
 
-			case strings.HasPrefix(kubeSecret.Name, functionconfig.NuclioFlexVolumeSecretNamePrefix):
+			case strings.HasPrefix(secret.Name, functionconfig.NuclioFlexVolumeSecretNamePrefix):
 				volumeSecretCounter++
 
 				// validate that the secret contains the volume label
-				volumeNameLabel, exists := kubeSecret.Labels[common.NuclioResourceLabelKeyVolumeName]
+				volumeNameLabel, exists := secret.Labels[common.NuclioResourceLabelKeyVolumeName]
 				suite.Require().True(exists)
 				suite.Require().Contains([]string{"volume1", "volume2"}, volumeNameLabel)
 
 				// validate that the secret contains the access key
-				accessKeyData, exists := kubeSecret.Data["accessKey"]
+				accessKeyData, exists := secret.Data["accessKey"]
 				suite.Require().True(exists)
 
 				suite.Require().Equal(accessKey, string(accessKeyData))
@@ -1084,9 +1076,9 @@ func (suite *DeployFunctionTestSuite) TestMultipleVolumeSecrets() {
 			default:
 				suite.Logger.DebugWithCtx(suite.Ctx,
 					"Got unknown secret",
-					"secretName", kubeSecret.Name,
-					"secretData", kubeSecret.Data)
-				suite.Failf("Got unknown secret.", "Secret name: %s", kubeSecret.Name)
+					"secretName", secret.Name,
+					"secretData", secret.Data)
+				suite.Failf("Got unknown secret.", "Secret name: %s", secret.Name)
 			}
 
 		}
@@ -1098,7 +1090,7 @@ func (suite *DeployFunctionTestSuite) TestMultipleVolumeSecrets() {
 }
 
 func (suite *DeployFunctionTestSuite) TestRedeployFunctionWithScrubbedField() {
-	scrubber := functionconfig.NewScrubber(nil, nil)
+	scrubber := suite.Platform.GetFunctionScrubber()
 
 	functionName := "func-with-v3io-stream-trigger"
 	createFunctionOptions := suite.CompileCreateFunctionOptions(functionName)
@@ -1118,12 +1110,12 @@ func (suite *DeployFunctionTestSuite) TestRedeployFunctionWithScrubbedField() {
 	validateSecretPasswordFunc := func(password string) {
 
 		// get function secret
-		secrets, err := suite.Platform.GetFunctionSecrets(suite.Ctx, functionName, suite.Namespace)
+		secrets, err := scrubber.GetObjectSecrets(suite.Ctx, functionName, suite.Namespace)
 		suite.Require().NoError(err)
 		suite.Require().Len(secrets, 1)
 
 		// decode secret data
-		decodedContents, err := scrubber.DecodeSecretData(secrets[0].Kubernetes.Data)
+		decodedContents, err := scrubber.DecodeSecretData(secrets[0].Data)
 		suite.Require().NoError(err)
 
 		// make sure first password is in secret
@@ -1574,6 +1566,102 @@ def handler(context, event):
 	})
 }
 
+func (suite *DeployFunctionTestSuite) TestRedeployWithUpdatedSidecarSpec() {
+	functionName := "func-with-sidecar"
+	createFunctionOptions := suite.CompileCreateFunctionOptions(functionName)
+
+	sidecarContainerName := "sidecar-test"
+	firstDeployCommands := []string{
+		"sh",
+		"-c",
+		"for i in {1..10}; do echo $i; sleep 10; done; echo 'First deploy done'",
+	}
+	secondDeployCommands := []string{
+		"/bin/sh",
+		"-c",
+		"for i in {1..10}; do echo $i; sleep 10; done; echo 'Second deploy done'",
+	}
+
+	busyboxImage := "busybox"
+	alpineImage := "alpine"
+
+	// create a busybox sidecar
+	createFunctionOptions.FunctionConfig.Spec.Sidecars = []*v1.Container{
+		{
+			Name:    sidecarContainerName,
+			Image:   busyboxImage,
+			Command: firstDeployCommands,
+		},
+	}
+
+	afterFirstDeploy := func(deployResult *platform.CreateFunctionResult) bool {
+		suite.Require().NotNil(deployResult)
+
+		// get the function pod and validate it has the sidecar
+		pods := suite.GetFunctionPods(functionName)
+		pod := pods[0]
+
+		suite.Require().Len(pod.Spec.Containers, 2)
+		suite.Require().Equal(sidecarContainerName, pod.Spec.Containers[1].Name)
+		suite.Require().Equal(busyboxImage, pod.Spec.Containers[1].Image)
+		suite.Require().Equal(firstDeployCommands, pod.Spec.Containers[1].Command)
+
+		// get the logs from the sidecar container to validate it ran
+		podLogOpts := v1.PodLogOptions{
+			Container: sidecarContainerName,
+		}
+		err := common.RetryUntilSuccessful(20*time.Second, 1*time.Second, func() bool {
+			return suite.validatePodLogsContainData(pod.Name, &podLogOpts, []string{"First deploy done"})
+		})
+		suite.Require().NoError(err)
+
+		// change the sidecar image and command
+		createFunctionOptions.FunctionConfig.Spec.Sidecars = []*v1.Container{
+			{
+				Name:    sidecarContainerName,
+				Image:   alpineImage,
+				Command: secondDeployCommands,
+			},
+		}
+
+		return true
+	}
+
+	afterSecondDeploy := func(deployResult *platform.CreateFunctionResult) bool {
+		suite.Require().NotNil(deployResult)
+
+		// get the function pod and validate it has the sidecar
+		pods := suite.GetFunctionPods(functionName)
+		pod := pods[0]
+		if len(pods) != 1 {
+			// because the first pod might still be terminating, we search for the new pod according to the start time
+			sort.Slice(pods, func(i, j int) bool {
+				return pods[i].CreationTimestamp.Before(&pods[j].CreationTimestamp)
+			})
+			pod = pods[len(pods)-1]
+		}
+
+		// validate the sidecar container has the new image and command
+		suite.Require().Len(pod.Spec.Containers, 2)
+		suite.Require().Equal(sidecarContainerName, pod.Spec.Containers[1].Name)
+		suite.Require().Equal(alpineImage, pod.Spec.Containers[1].Image)
+		suite.Require().Equal(secondDeployCommands, pod.Spec.Containers[1].Command)
+
+		// get the logs from the sidecar container to validate it ran the new command
+		podLogOpts := v1.PodLogOptions{
+			Container: sidecarContainerName,
+		}
+		err := common.RetryUntilSuccessful(20*time.Second, 1*time.Second, func() bool {
+			return suite.validatePodLogsContainData(pod.Name, &podLogOpts, []string{"Second deploy done"})
+		})
+		suite.Require().NoError(err)
+
+		return true
+	}
+
+	suite.DeployFunctionAndRedeploy(createFunctionOptions, afterFirstDeploy, afterSecondDeploy)
+}
+
 func (suite *DeployFunctionTestSuite) TestDeployFromGitSanity() {
 	functionName := "func-from-git"
 	createFunctionOptions := suite.CompileCreateFunctionOptions(functionName)
@@ -1597,6 +1685,7 @@ func (suite *DeployFunctionTestSuite) TestDeployFromGitSanity() {
 		return true
 	})
 }
+
 func (suite *DeployFunctionTestSuite) createPlatformConfigmapWithJSONLogger() *v1.ConfigMap {
 
 	// create a platform config configmap with a json logger sink (this is how it is on production)
@@ -1897,9 +1986,10 @@ func (suite *UpdateFunctionTestSuite) TestUpdateFunctionWithSecret() {
 		})
 		suite.Require().NoError(err, "Failed to delete function")
 	}()
-
+	scrubber := functionconfig.NewScrubber(suite.Logger, suite.Platform.GetConfig().SensitiveFields.CompileSensitiveFieldsRegex(),
+		suite.KubeClientSet)
 	// get function secret data
-	secretData, err := suite.Platform.GetFunctionSecretMap(ctx, functionName, suite.Namespace)
+	secretData, _, err := scrubber.GetObjectSecretMap(ctx, functionName, suite.Namespace)
 	suite.Require().NoError(err, "Failed to get function secret data")
 
 	// ensure secret contains the password
@@ -1913,7 +2003,7 @@ func (suite *UpdateFunctionTestSuite) TestUpdateFunctionWithSecret() {
 	suite.Require().NoError(err, "Failed to create function")
 
 	// get function secret data
-	secretData, err = suite.Platform.GetFunctionSecretMap(ctx, functionName, suite.Namespace)
+	secretData, _, err = scrubber.GetObjectSecretMap(ctx, functionName, suite.Namespace)
 	suite.Require().NoError(err, "Failed to get function secret data")
 
 	// ensure secret still contains the same password
@@ -1956,6 +2046,40 @@ func (suite *DeployAPIGatewayTestSuite) TestDexAuthMode() {
 			suite.Assert().Contains(ingress.Annotations, "nginx.ingress.kubernetes.io/auth-signin")
 			suite.Assert().Contains(ingress.Annotations["nginx.ingress.kubernetes.io/auth-signin"], overrideOauth2ProxyURL)
 			suite.Assert().Contains(ingress.Annotations["nginx.ingress.kubernetes.io/auth-url"], overrideOauth2ProxyURL)
+		})
+		suite.Require().NoError(err)
+
+		return true
+	})
+}
+
+func (suite *DeployAPIGatewayTestSuite) TestFunctionWithTwoGateways() {
+	functionName := "some-function-name"
+	apiGatewayName1 := "api-gateway-1"
+	apiGatewayName2 := "api-gateway-2"
+	createFunctionOptions := suite.CompileCreateFunctionOptions(functionName)
+
+	suite.DeployFunction(createFunctionOptions, func(deployResult *platform.CreateFunctionResult) bool {
+		// create first api gateway on top of given function
+		createAPIGatewayOptions1 := suite.CompileCreateAPIGatewayOptions(apiGatewayName1, functionName)
+		createAPIGatewayOptions1.APIGatewayConfig.Spec.AuthenticationMode = ingress.AuthenticationModeNone
+		createAPIGatewayOptions1.APIGatewayConfig.Spec.Host = "host1.com"
+
+		err := suite.DeployAPIGateway(createAPIGatewayOptions1, func(ingressObj *networkingv1.Ingress) {
+			// create second api gateway on top of the same function
+			createAPIGatewayOptions2 := suite.CompileCreateAPIGatewayOptions(apiGatewayName2, functionName)
+			createAPIGatewayOptions2.APIGatewayConfig.Spec.AuthenticationMode = ingress.AuthenticationModeNone
+			createAPIGatewayOptions2.APIGatewayConfig.Spec.Host = "host2.com"
+
+			err := suite.DeployAPIGateway(createAPIGatewayOptions2, func(ingress *networkingv1.Ingress) {
+				// check that both gateways are invokable
+				_, err := http.Get(fmt.Sprintf("http://%s", createAPIGatewayOptions1.APIGatewayConfig.Spec.Host))
+				suite.Require().NoError(err)
+
+				_, err = http.Get(fmt.Sprintf("http://%s", createAPIGatewayOptions2.APIGatewayConfig.Spec.Host))
+				suite.Require().NoError(err)
+			})
+			suite.Require().NoError(err)
 		})
 		suite.Require().NoError(err)
 
@@ -2085,6 +2209,55 @@ func (suite *ProjectTestSuite) TestCreate() {
 	// requested and created project are equal
 	createdProject := projects[0]
 	suite.Require().Equal(projectConfig, *createdProject.GetConfig())
+}
+
+func (suite *ProjectTestSuite) TestCreateFromLeaderIgnoreInvalidLabels() {
+	invalidLabelKey1 := "invalid.label@-key"
+	invalidLabelKey2 := "the-key-is-invalid"
+	projectConfig := platform.ProjectConfig{
+		Meta: platform.ProjectMeta{
+			Name:      "test-project",
+			Namespace: suite.Namespace,
+			Labels: map[string]string{
+				invalidLabelKey1: "label-value",
+				invalidLabelKey2: "inva!id_v8$alue",
+			},
+		},
+		Spec: platform.ProjectSpec{
+			Description: "some description",
+		},
+	}
+
+	// set the platform's leader kind
+	suite.Platform.GetConfig().ProjectsLeader = &platformconfig.ProjectsLeader{
+		Kind: platformconfig.ProjectsLeaderKindMock,
+	}
+
+	// create project
+	err := suite.Platform.CreateProject(suite.Ctx, &platform.CreateProjectOptions{
+		ProjectConfig: &projectConfig,
+		RequestOrigin: platformconfig.ProjectsLeaderKindMock,
+	})
+	suite.Require().NoError(err, "Failed to create project")
+	defer func() {
+		err = suite.Platform.DeleteProject(suite.Ctx, &platform.DeleteProjectOptions{
+			Meta:     projectConfig.Meta,
+			Strategy: platform.DeleteProjectStrategyRestricted,
+		})
+		suite.Require().NoError(err, "Failed to delete project")
+	}()
+
+	// get created project
+	projects, err := suite.Platform.GetProjects(suite.Ctx, &platform.GetProjectsOptions{
+		Meta: projectConfig.Meta,
+	})
+	suite.Require().NoError(err, "Failed to get projects")
+	suite.Require().Equal(len(projects), 1)
+
+	// verify created project does not contain the invalid label
+	createdProject := projects[0]
+	suite.Require().NotContains(createdProject.GetConfig().Meta.Labels, invalidLabelKey1)
+	suite.Require().NotContains(createdProject.GetConfig().Meta.Labels, invalidLabelKey2)
 }
 
 func (suite *ProjectTestSuite) TestUpdate() {

@@ -56,14 +56,15 @@ import (
 
 type Platform struct {
 	*abstract.Platform
-	deployer       *client.Deployer
-	getter         *client.Getter
-	updater        *client.Updater
-	deleter        *client.Deleter
-	kubeconfigPath string
-	consumer       *client.Consumer
-	projectsClient project.Client
-	projectsCache  *cache.Expiring
+	deployer           *client.Deployer
+	getter             *client.Getter
+	updater            *client.Updater
+	deleter            *client.Deleter
+	kubeconfigPath     string
+	consumer           *client.Consumer
+	projectsClient     project.Client
+	projectsCache      *cache.Expiring
+	apiGatewayScrubber *platform.APIGatewayScrubber
 }
 
 const Mib = 1048576
@@ -139,6 +140,16 @@ func NewPlatform(ctx context.Context,
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to create an updater")
 	}
+
+	// set kubeClientSet for Function Scrubber
+	newPlatform.FunctionScrubber = functionconfig.NewScrubber(parentLogger,
+		platformConfiguration.SensitiveFields.CompileSensitiveFieldsRegex(),
+		newPlatform.consumer.KubeClientSet,
+	)
+
+	// create api gateway scrubber
+	newPlatform.apiGatewayScrubber = platform.NewAPIGatewayScrubber(parentLogger, platform.GetAPIGatewaySensitiveField(),
+		newPlatform.consumer.KubeClientSet)
 
 	// create projects client
 	newPlatform.projectsClient, err = NewProjectsClient(newPlatform, platformConfiguration)
@@ -265,9 +276,6 @@ func (p *Platform) CreateFunction(ctx context.Context, createFunctionOptions *pl
 		createFunctionOptions.Logger.DebugWithCtx(ctx, "Function creation failed, brief error message extracted",
 			"briefErrorsMessage", briefErrorsMessage)
 
-		createFunctionOptions.Logger.WarnWithCtx(ctx, "Function creation failed, updating function status",
-			"errorStack", errorStack.String())
-
 		functionStatus := &functionconfig.Status{
 			State:   functionconfig.FunctionStateError,
 			Message: briefErrorsMessage,
@@ -288,6 +296,14 @@ func (p *Platform) CreateFunction(ctx context.Context, createFunctionOptions *pl
 			if existingFunctionInstance.Status.State == functionconfig.FunctionStateUnhealthy {
 				functionStatus.State = functionconfig.FunctionStateUnhealthy
 			}
+		}
+
+		if functionStatus.State == functionconfig.FunctionStateUnhealthy {
+			createFunctionOptions.Logger.WarnWithCtx(ctx, "Function deployment failed, setting state to unhealthy. The issue might be transient or require manual redeployment",
+				"err", errorStack.String())
+		} else {
+			createFunctionOptions.Logger.WarnWithCtx(ctx, "Function creation failed, setting state to error",
+				"err", errorStack.String())
 		}
 
 		// create or update the function. The possible creation needs to happen here, since on cases of
@@ -586,7 +602,7 @@ func (p *Platform) GetFunctionReplicaLogsStream(ctx context.Context,
 		CoreV1().
 		Pods(options.Namespace).
 		GetLogs(options.Name, &v1.PodLogOptions{
-			Container:    client.FunctionContainerName,
+			Container:    options.ContainerName,
 			SinceSeconds: options.SinceSeconds,
 			TailLines:    options.TailLines,
 			Follow:       options.Follow,
@@ -611,6 +627,21 @@ func (p *Platform) GetFunctionReplicaNames(ctx context.Context,
 		names = append(names, pod.GetName())
 	}
 	return names, nil
+}
+
+func (p *Platform) GetFunctionReplicaContainers(ctx context.Context, functionConfig *functionconfig.Config, replicaName string) ([]string, error) {
+	pod, err := p.consumer.KubeClientSet.
+		CoreV1().
+		Pods(functionConfig.Meta.Namespace).
+		Get(ctx, replicaName, metav1.GetOptions{})
+	if err != nil {
+		return nil, errors.Wrap(err, "Failed to get function pod")
+	}
+	var containerNames []string
+	for _, container := range pod.Spec.Containers {
+		containerNames = append(containerNames, container.Name)
+	}
+	return containerNames, nil
 }
 
 // GetName returns the platform name
@@ -766,7 +797,7 @@ func (p *Platform) GetProjects(ctx context.Context,
 // CreateAPIGateway creates and deploys a new api gateway
 func (p *Platform) CreateAPIGateway(ctx context.Context,
 	createAPIGatewayOptions *platform.CreateAPIGatewayOptions) error {
-	newAPIGateway := nuclioio.NuclioAPIGateway{}
+	newAPIGateway := &nuclioio.NuclioAPIGateway{}
 
 	// enrich
 	p.enrichAPIGatewayConfig(ctx, createAPIGatewayOptions.APIGatewayConfig, nil)
@@ -779,7 +810,16 @@ func (p *Platform) CreateAPIGateway(ctx context.Context,
 		return errors.Wrap(err, "Failed to validate and enrich an API-gateway name")
 	}
 
-	p.platformAPIGatewayToAPIGateway(createAPIGatewayOptions.APIGatewayConfig, &newAPIGateway)
+	// scrub api gateway config
+	if p.GetConfig().SensitiveFields.MaskSensitiveFields {
+		scrubbedConfig, err := p.apiGatewayScrubber.ScrubAPIGatewayConfig(ctx, createAPIGatewayOptions.APIGatewayConfig)
+		if err != nil {
+			return errors.Wrap(err, "Failed to scrub api gateway config")
+		}
+		createAPIGatewayOptions.APIGatewayConfig = scrubbedConfig
+	}
+
+	p.platformAPIGatewayToAPIGateway(createAPIGatewayOptions.APIGatewayConfig, newAPIGateway)
 
 	// set api gateway state to "waitingForProvisioning", so the controller will know to create/update this resource
 	newAPIGateway.Status.State = platform.APIGatewayStateWaitingForProvisioning
@@ -787,7 +827,7 @@ func (p *Platform) CreateAPIGateway(ctx context.Context,
 	// create
 	if _, err := p.consumer.NuclioClientSet.NuclioV1beta1().
 		NuclioAPIGateways(newAPIGateway.Namespace).
-		Create(ctx, &newAPIGateway, metav1.CreateOptions{}); err != nil {
+		Create(ctx, newAPIGateway, metav1.CreateOptions{}); err != nil {
 		return errors.Wrap(err, "Failed to create an API gateway")
 	}
 
@@ -796,11 +836,34 @@ func (p *Platform) CreateAPIGateway(ctx context.Context,
 
 // UpdateAPIGateway will update a previously existing api gateway
 func (p *Platform) UpdateAPIGateway(ctx context.Context, updateAPIGatewayOptions *platform.UpdateAPIGatewayOptions) error {
+	// get existing api gateway
 	apiGateway, err := p.consumer.NuclioClientSet.NuclioV1beta1().
 		NuclioAPIGateways(updateAPIGatewayOptions.APIGatewayConfig.Meta.Namespace).
 		Get(ctx, updateAPIGatewayOptions.APIGatewayConfig.Meta.Name, metav1.GetOptions{})
 	if err != nil {
 		return errors.Wrap(err, "Failed to get api gateway to update")
+	}
+
+	// restore existing config
+	apiGatewayConfig := &platform.APIGatewayConfig{
+		Meta: platform.APIGatewayMeta{
+			Namespace:   apiGateway.Namespace,
+			Name:        apiGateway.Name,
+			Labels:      apiGateway.Labels,
+			Annotations: apiGateway.Annotations,
+		},
+		Spec: apiGateway.Spec,
+	}
+	var restoredAPIGatewayConfig *platform.APIGatewayConfig
+	if scrubbed, err := p.apiGatewayScrubber.HasScrubbedConfig(apiGatewayConfig, platform.GetAPIGatewaySensitiveField()); err == nil && scrubbed {
+		if restoredAPIGatewayConfig, err = p.apiGatewayScrubber.RestoreAPIGatewayConfig(ctx, apiGatewayConfig); err != nil {
+			return errors.Wrap(err, "Failed to scrub api gateway config")
+		} else if err != nil {
+			return errors.Wrap(err, "Failed to check if api gateway config is scrubbed")
+		}
+		apiGateway.Spec = restoredAPIGatewayConfig.Spec
+		apiGateway.Labels = restoredAPIGatewayConfig.Meta.Labels
+		apiGateway.Annotations = restoredAPIGatewayConfig.Meta.Annotations
 	}
 
 	// enrich
@@ -812,6 +875,14 @@ func (p *Platform) UpdateAPIGateway(ctx context.Context, updateAPIGatewayOptions
 		updateAPIGatewayOptions.ValidateFunctionsExistence,
 		apiGateway); err != nil {
 		return errors.Wrap(err, "Failed to validate api gateway")
+	}
+	// scrub api gateway config
+	if p.GetConfig().SensitiveFields.MaskSensitiveFields {
+		scrubbedConfig, err := p.apiGatewayScrubber.ScrubAPIGatewayConfig(ctx, updateAPIGatewayOptions.APIGatewayConfig)
+		if err != nil {
+			return errors.Wrap(err, "Failed to scrub api gateway config")
+		}
+		updateAPIGatewayOptions.APIGatewayConfig = scrubbedConfig
 	}
 
 	apiGateway.Annotations = updateAPIGatewayOptions.APIGatewayConfig.Meta.Annotations
@@ -1168,6 +1239,32 @@ func (p *Platform) GetNamespaces(ctx context.Context) ([]string, error) {
 	return namespaceNames, nil
 }
 
+func (p *Platform) GetFunctionScrubber() *functionconfig.Scrubber {
+	if p.FunctionScrubber == nil {
+		p.FunctionScrubber = functionconfig.NewScrubber(p.Logger,
+			p.GetConfig().SensitiveFields.CompileSensitiveFieldsRegex(),
+			p.consumer.KubeClientSet,
+		)
+		return p.FunctionScrubber
+	}
+	if p.FunctionScrubber.KubeClientSet == nil {
+		p.FunctionScrubber.KubeClientSet = p.consumer.KubeClientSet
+	}
+	return p.FunctionScrubber
+}
+
+func (p *Platform) GetAPIGatewayScrubber() *platform.APIGatewayScrubber {
+	if p.apiGatewayScrubber == nil {
+		p.apiGatewayScrubber = platform.NewAPIGatewayScrubber(p.Logger, platform.GetAPIGatewaySensitiveField(),
+			p.consumer.KubeClientSet)
+		return p.apiGatewayScrubber
+	}
+	if p.apiGatewayScrubber.KubeClientSet == nil {
+		p.apiGatewayScrubber.KubeClientSet = p.consumer.KubeClientSet
+	}
+	return p.apiGatewayScrubber
+}
+
 func (p *Platform) GetDefaultInvokeIPAddresses() ([]string, error) {
 	return []string{}, nil
 }
@@ -1202,51 +1299,6 @@ func (p *Platform) SaveFunctionDeployLogs(ctx context.Context, functionName, nam
 		FunctionMeta:   &function.GetConfig().Meta,
 		FunctionStatus: function.GetStatus(),
 	})
-}
-
-// GetFunctionSecrets returns all the function's secrets
-func (p *Platform) GetFunctionSecrets(ctx context.Context, functionName, functionNamespace string) ([]platform.FunctionSecret, error) {
-	var functionSecrets []platform.FunctionSecret
-
-	secrets, err := p.consumer.KubeClientSet.CoreV1().Secrets(functionNamespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("%s=%s", common.NuclioResourceLabelKeyFunctionName, functionName),
-	})
-	if err != nil {
-		return nil, errors.Wrapf(err, "Failed to list secrets for function - %s", functionName)
-	}
-
-	for _, secret := range secrets.Items {
-		secret := secret
-		functionSecrets = append(functionSecrets, platform.FunctionSecret{
-			Kubernetes: &secret,
-		})
-	}
-
-	return functionSecrets, nil
-}
-
-// GetFunctionSecretData returns the function's secret data
-func (p *Platform) GetFunctionSecretData(ctx context.Context, functionName, functionNamespace string) (map[string][]byte, error) {
-
-	// get existing function secret
-	functionSecrets, err := p.GetFunctionSecrets(ctx, functionName, functionNamespace)
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to get function secret")
-	}
-
-	// if secret exists, get the data
-	for _, functionSecret := range functionSecrets {
-		functionSecret := functionSecret.Kubernetes
-
-		// if it is a flex volume secret, skip it
-		if strings.HasPrefix(functionSecret.Name, functionconfig.NuclioFlexVolumeSecretNamePrefix) {
-			continue
-		}
-
-		return functionSecret.Data, nil
-	}
-
-	return nil, nil
 }
 
 func (p *Platform) ValidateFunctionConfig(ctx context.Context, functionConfig *functionconfig.Config) error {
@@ -1653,6 +1705,18 @@ func (p *Platform) enrichAPIGatewayConfig(ctx context.Context,
 		apiGatewayConfig.Meta.Labels = map[string]string{}
 	}
 
+	if apiGatewayConfig.Spec.Host == "" {
+		templateData := map[string]interface{}{
+			"Name":         apiGatewayConfig.Meta.Name,
+			"ResourceName": apiGatewayConfig.Meta.Name,
+			"Namespace":    apiGatewayConfig.Meta.Namespace,
+			"ProjectName":  apiGatewayConfig.Meta.Labels[common.NuclioResourceLabelKeyProjectName],
+		}
+		if apiGatewayHost, err := p.renderIngressHost(ctx, common.DefaultIngressHostTemplate, templateData, 8); err == nil {
+			apiGatewayConfig.Spec.Host = apiGatewayHost
+		}
+	}
+
 	// enrich project name if not exists or value is empty
 	if existingApiGatewayConfig != nil {
 		if value, exist := apiGatewayConfig.Meta.Labels[common.NuclioResourceLabelKeyProjectName]; value == "" || !exist {
@@ -1745,17 +1809,33 @@ func (p *Platform) enrichFunctionNodeSelector(ctx context.Context, functionConfi
 	if err != nil {
 		return errors.Wrap(err, "Failed to get function project")
 	}
-	p.Logger.DebugWithCtx(ctx,
-		"Enriching function node selector from project",
-		"functionName", functionConfig.Meta.Name,
-		"nodeSelector", p.Config.Kube.DefaultFunctionNodeSelector)
-	functionConfig.Spec.NodeSelector = labels.Merge(functionProject.GetConfig().Spec.DefaultFunctionNodeSelector, functionConfig.Spec.NodeSelector)
 
-	p.Logger.DebugWithCtx(ctx,
-		"Enriching function node selector from platform config",
-		"functionName", functionConfig.Meta.Name,
-		"nodeSelector", p.Config.Kube.DefaultFunctionNodeSelector)
-	functionConfig.Spec.NodeSelector = labels.Merge(p.Config.Kube.DefaultFunctionNodeSelector, functionConfig.Spec.NodeSelector)
+	var defaultNodeSelector map[string]string
+
+	if p.Config.Kube.IgnorePlatformIfProjectNodeSelectors {
+		if functionProject.GetConfig().Spec.DefaultFunctionNodeSelector != nil {
+			p.Logger.DebugWithCtx(ctx,
+				"Enriching function node selector from project",
+				"functionName", functionConfig.Meta.Name,
+				"nodeSelector", p.Config.Kube.DefaultFunctionNodeSelector)
+			defaultNodeSelector = functionProject.GetConfig().Spec.DefaultFunctionNodeSelector
+		} else {
+			p.Logger.DebugWithCtx(ctx,
+				"Enriching function node selector from platform config",
+				"functionName", functionConfig.Meta.Name,
+				"nodeSelector", p.Config.Kube.DefaultFunctionNodeSelector)
+			defaultNodeSelector = p.Config.Kube.DefaultFunctionNodeSelector
+		}
+	} else {
+		p.Logger.DebugWithCtx(ctx,
+			"Enriching function node selector from platform config and project",
+			"functionName", functionConfig.Meta.Name,
+			"platformNodeSelector", p.Config.Kube.DefaultFunctionNodeSelector,
+			"projectNodeSelector", functionProject.GetConfig().Spec.DefaultFunctionNodeSelector)
+		defaultNodeSelector = labels.Merge(p.Config.Kube.DefaultFunctionNodeSelector, functionProject.GetConfig().Spec.DefaultFunctionNodeSelector)
+	}
+
+	functionConfig.Spec.NodeSelector = labels.Merge(defaultNodeSelector, functionConfig.Spec.NodeSelector)
 	return nil
 }
 
@@ -1995,27 +2075,15 @@ func (p *Platform) enrichHTTPTriggerIngresses(ctx context.Context,
 
 		if ingressHostTemplate, hostTemplateFound := encodedIngressMap["hostTemplate"].(string); hostTemplateFound {
 
-			// one way to say "just render me the default"
-			if ingressHostTemplate == "@nuclio.fromDefault" {
-				ingressHostTemplate = p.Config.Kube.DefaultHTTPIngressHostTemplate
-			} else {
-				p.Logger.DebugWithCtx(ctx, "Received custom ingress host template to enrich host with",
-					"ingressHostTemplate", ingressHostTemplate,
-					"functionName", functionConfig.Meta.Name)
-			}
-
-			// render host with pre-defined data
-			renderedIngressHost, err := common.RenderTemplate(ingressHostTemplate, templateData)
-			if err != nil {
-				return errors.Wrap(err, "Failed to render ingress host template")
-			}
-
 			// try infer from attributes, if not use default 8
 			hostTemplateRandomCharsLength := 8
 			if hostTemplateRandomCharsLengthValue, ok := encodedIngressMap["hostTemplateRandomCharsLength"].(int); ok {
 				hostTemplateRandomCharsLength = hostTemplateRandomCharsLengthValue
 			}
-			renderedIngressHost = p.alignIngressHostSubdomainLevel(renderedIngressHost, hostTemplateRandomCharsLength)
+			renderedIngressHost, err := p.renderIngressHost(ctx, ingressHostTemplate, templateData, hostTemplateRandomCharsLength)
+			if err != nil {
+				return errors.Wrap(err, "Failed to render ingress host template")
+			}
 			if ingressHost, ingressHostFound := encodedIngressMap["host"].(string); !ingressHostFound || ingressHost == "" {
 				p.Logger.DebugWithCtx(ctx, "Enriching function ingress host from template",
 					"renderedIngressHost", renderedIngressHost,
@@ -2029,6 +2097,25 @@ func (p *Platform) enrichHTTPTriggerIngresses(ctx context.Context,
 		}
 	}
 	return nil
+}
+
+func (p *Platform) renderIngressHost(ctx context.Context, ingressHostTemplate string, templateData map[string]interface{}, hostTemplateRandomCharsLength int) (string, error) {
+	// one way to say "just render me the default"
+	if ingressHostTemplate == common.DefaultIngressHostTemplate {
+		ingressHostTemplate = p.Config.Kube.DefaultHTTPIngressHostTemplate
+	} else {
+		p.Logger.DebugWithCtx(ctx,
+			"Received custom ingress host template to enrich host with",
+			"ingressHostTemplate", ingressHostTemplate)
+	}
+
+	// render host with pre-defined data
+	renderedIngressHost, err := common.RenderTemplate(ingressHostTemplate, templateData)
+	if err != nil {
+		return "", err
+	}
+
+	return p.alignIngressHostSubdomainLevel(renderedIngressHost, hostTemplateRandomCharsLength), nil
 }
 
 // will take a host, split to "."
