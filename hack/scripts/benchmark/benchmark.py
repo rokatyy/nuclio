@@ -157,7 +157,7 @@ class Vegeta(object):
         ]
         self._logger.debug(f"Attacking command - {' '.join(vegeta_cmd)}")
         try:
-            subprocess.run(vegeta_cmd,
+            subprocess.run(' '.join(vegeta_cmd),
                            cwd=self._workdir,
                            check=True,
                            stdout=subprocess.PIPE,
