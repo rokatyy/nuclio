@@ -1,0 +1,1732 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nuclio/nuclio/pkg/functionconfig/config",
+  "$ref": "#/$defs/Config",
+  "$defs": {
+    "Affinity": {
+      "properties": {
+        "nodeAffinity": {
+          "$ref": "#/$defs/NodeAffinity"
+        },
+        "podAffinity": {
+          "$ref": "#/$defs/PodAffinity"
+        },
+        "podAntiAffinity": {
+          "$ref": "#/$defs/PodAntiAffinity"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "AutoScaleMetric": {
+      "properties": {
+        "metricName": {
+          "type": "string"
+        },
+        "windowSize": {
+          "type": "string"
+        },
+        "threshold": {
+          "type": "integer"
+        },
+        "sourceType": {
+          "type": "string"
+        },
+        "displayType": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "threshold"
+      ]
+    },
+    "Build": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "functionSourceCode": {
+          "type": "string"
+        },
+        "functionConfigPath": {
+          "type": "string"
+        },
+        "tempDir": {
+          "type": "string"
+        },
+        "registry": {
+          "type": "string"
+        },
+        "baseImageRegistry": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "noBaseImagesPull": {
+          "type": "boolean"
+        },
+        "noCache": {
+          "type": "boolean"
+        },
+        "noCleanup": {
+          "type": "boolean"
+        },
+        "baseImage": {
+          "type": "string"
+        },
+        "commands": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "directives": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/Directive"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        },
+        "scriptPaths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "addedPaths": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "dependencies": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "onbuildImage": {
+          "type": "string"
+        },
+        "offline": {
+          "type": "boolean"
+        },
+        "runtimeAttributes": {
+          "type": "object"
+        },
+        "codeEntryType": {
+          "type": "string"
+        },
+        "codeEntryAttributes": {
+          "type": "object"
+        },
+        "timestamp": {
+          "type": "integer"
+        },
+        "buildTimeoutSeconds": {
+          "type": "integer"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "args": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "flags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "builderServiceAccount": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Capabilities": {
+      "properties": {
+        "add": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "drop": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Config": {
+      "properties": {
+        "metadata": {
+          "$ref": "#/$defs/Meta"
+        },
+        "spec": {
+          "$ref": "#/$defs/Spec"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ConfigMapEnvSource": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "optional": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ConfigMapKeySelector": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "optional": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "key"
+      ]
+    },
+    "Container": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "workingDir": {
+          "type": "string"
+        },
+        "ports": {
+          "items": {
+            "$ref": "#/$defs/ContainerPort"
+          },
+          "type": "array"
+        },
+        "envFrom": {
+          "items": {
+            "$ref": "#/$defs/EnvFromSource"
+          },
+          "type": "array"
+        },
+        "env": {
+          "items": {
+            "$ref": "#/$defs/EnvVar"
+          },
+          "type": "array"
+        },
+        "resources": {
+          "$ref": "#/$defs/ResourceRequirements"
+        },
+        "resizePolicy": {
+          "items": {
+            "$ref": "#/$defs/ContainerResizePolicy"
+          },
+          "type": "array"
+        },
+        "volumeMounts": {
+          "items": {
+            "$ref": "#/$defs/VolumeMount"
+          },
+          "type": "array"
+        },
+        "volumeDevices": {
+          "items": {
+            "$ref": "#/$defs/VolumeDevice"
+          },
+          "type": "array"
+        },
+        "livenessProbe": {
+          "$ref": "#/$defs/Probe"
+        },
+        "readinessProbe": {
+          "$ref": "#/$defs/Probe"
+        },
+        "startupProbe": {
+          "$ref": "#/$defs/Probe"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/Lifecycle"
+        },
+        "terminationMessagePath": {
+          "type": "string"
+        },
+        "terminationMessagePolicy": {
+          "type": "string"
+        },
+        "imagePullPolicy": {
+          "type": "string"
+        },
+        "securityContext": {
+          "$ref": "#/$defs/SecurityContext"
+        },
+        "stdin": {
+          "type": "boolean"
+        },
+        "stdinOnce": {
+          "type": "boolean"
+        },
+        "tty": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name"
+      ]
+    },
+    "ContainerPort": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "hostPort": {
+          "type": "integer"
+        },
+        "containerPort": {
+          "type": "integer"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "hostIP": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "containerPort"
+      ]
+    },
+    "ContainerResizePolicy": {
+      "properties": {
+        "resourceName": {
+          "type": "string"
+        },
+        "restartPolicy": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "resourceName",
+        "restartPolicy"
+      ]
+    },
+    "ContainerResourceMetricSource": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/MetricTarget"
+        },
+        "container": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "target",
+        "container"
+      ]
+    },
+    "CrossVersionObjectReference": {
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "apiVersion": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "kind",
+        "name"
+      ]
+    },
+    "DataBinding": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "class": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "attributes": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "class",
+        "kind",
+        "url"
+      ]
+    },
+    "DeploymentStrategy": {
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "rollingUpdate": {
+          "$ref": "#/$defs/RollingUpdateDeployment"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Directive": {
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "EnvFromSource": {
+      "properties": {
+        "prefix": {
+          "type": "string"
+        },
+        "configMapRef": {
+          "$ref": "#/$defs/ConfigMapEnvSource"
+        },
+        "secretRef": {
+          "$ref": "#/$defs/SecretEnvSource"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "EnvVar": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "valueFrom": {
+          "$ref": "#/$defs/EnvVarSource"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name"
+      ]
+    },
+    "EnvVarSource": {
+      "properties": {
+        "fieldRef": {
+          "$ref": "#/$defs/ObjectFieldSelector"
+        },
+        "resourceFieldRef": {
+          "$ref": "#/$defs/ResourceFieldSelector"
+        },
+        "configMapKeyRef": {
+          "$ref": "#/$defs/ConfigMapKeySelector"
+        },
+        "secretKeyRef": {
+          "$ref": "#/$defs/SecretKeySelector"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ExecAction": {
+      "properties": {
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ExternalMetricSource": {
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/MetricIdentifier"
+        },
+        "target": {
+          "$ref": "#/$defs/MetricTarget"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "metric",
+        "target"
+      ]
+    },
+    "GRPCAction": {
+      "properties": {
+        "port": {
+          "type": "integer"
+        },
+        "service": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "port",
+        "service"
+      ]
+    },
+    "HTTPGetAction": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "port": {
+          "$ref": "#/$defs/IntOrString"
+        },
+        "host": {
+          "type": "string"
+        },
+        "scheme": {
+          "type": "string"
+        },
+        "httpHeaders": {
+          "items": {
+            "$ref": "#/$defs/HTTPHeader"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "port"
+      ]
+    },
+    "HTTPHeader": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "value"
+      ]
+    },
+    "IntOrString": {
+      "properties": {
+        "Type": {
+          "type": "integer"
+        },
+        "IntVal": {
+          "type": "integer"
+        },
+        "StrVal": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "Type",
+        "IntVal",
+        "StrVal"
+      ]
+    },
+    "LabelSelector": {
+      "properties": {
+        "matchLabels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "matchExpressions": {
+          "items": {
+            "$ref": "#/$defs/LabelSelectorRequirement"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "LabelSelectorRequirement": {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "key",
+        "operator"
+      ]
+    },
+    "Lifecycle": {
+      "properties": {
+        "postStart": {
+          "$ref": "#/$defs/LifecycleHandler"
+        },
+        "preStop": {
+          "$ref": "#/$defs/LifecycleHandler"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "LifecycleHandler": {
+      "properties": {
+        "exec": {
+          "$ref": "#/$defs/ExecAction"
+        },
+        "httpGet": {
+          "$ref": "#/$defs/HTTPGetAction"
+        },
+        "tcpSocket": {
+          "$ref": "#/$defs/TCPSocketAction"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "LoggerSink": {
+      "properties": {
+        "level": {
+          "type": "string"
+        },
+        "sink": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Meta": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "resourceVersion": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "MetricIdentifier": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "selector": {
+          "$ref": "#/$defs/LabelSelector"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name"
+      ]
+    },
+    "MetricSpec": {
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "object": {
+          "$ref": "#/$defs/ObjectMetricSource"
+        },
+        "pods": {
+          "$ref": "#/$defs/PodsMetricSource"
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceMetricSource"
+        },
+        "containerResource": {
+          "$ref": "#/$defs/ContainerResourceMetricSource"
+        },
+        "external": {
+          "$ref": "#/$defs/ExternalMetricSource"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "type"
+      ]
+    },
+    "MetricTarget": {
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Quantity"
+        },
+        "averageValue": {
+          "$ref": "#/$defs/Quantity"
+        },
+        "averageUtilization": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "type"
+      ]
+    },
+    "NodeAffinity": {
+      "properties": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+          "$ref": "#/$defs/NodeSelector"
+        },
+        "preferredDuringSchedulingIgnoredDuringExecution": {
+          "items": {
+            "$ref": "#/$defs/PreferredSchedulingTerm"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "NodeSelector": {
+      "properties": {
+        "nodeSelectorTerms": {
+          "items": {
+            "$ref": "#/$defs/NodeSelectorTerm"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "nodeSelectorTerms"
+      ]
+    },
+    "NodeSelectorRequirement": {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "key",
+        "operator"
+      ]
+    },
+    "NodeSelectorTerm": {
+      "properties": {
+        "matchExpressions": {
+          "items": {
+            "$ref": "#/$defs/NodeSelectorRequirement"
+          },
+          "type": "array"
+        },
+        "matchFields": {
+          "items": {
+            "$ref": "#/$defs/NodeSelectorRequirement"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ObjectFieldSelector": {
+      "properties": {
+        "apiVersion": {
+          "type": "string"
+        },
+        "fieldPath": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "fieldPath"
+      ]
+    },
+    "ObjectMetricSource": {
+      "properties": {
+        "describedObject": {
+          "$ref": "#/$defs/CrossVersionObjectReference"
+        },
+        "target": {
+          "$ref": "#/$defs/MetricTarget"
+        },
+        "metric": {
+          "$ref": "#/$defs/MetricIdentifier"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "describedObject",
+        "target",
+        "metric"
+      ]
+    },
+    "Partition": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "checkpoint": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "id"
+      ]
+    },
+    "Platform": {
+      "properties": {
+        "attributes": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PodAffinity": {
+      "properties": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+          "items": {
+            "$ref": "#/$defs/PodAffinityTerm"
+          },
+          "type": "array"
+        },
+        "preferredDuringSchedulingIgnoredDuringExecution": {
+          "items": {
+            "$ref": "#/$defs/WeightedPodAffinityTerm"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PodAffinityTerm": {
+      "properties": {
+        "labelSelector": {
+          "$ref": "#/$defs/LabelSelector"
+        },
+        "namespaces": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "topologyKey": {
+          "type": "string"
+        },
+        "namespaceSelector": {
+          "$ref": "#/$defs/LabelSelector"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "topologyKey"
+      ]
+    },
+    "PodAntiAffinity": {
+      "properties": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+          "items": {
+            "$ref": "#/$defs/PodAffinityTerm"
+          },
+          "type": "array"
+        },
+        "preferredDuringSchedulingIgnoredDuringExecution": {
+          "items": {
+            "$ref": "#/$defs/WeightedPodAffinityTerm"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PodSecurityContext": {
+      "properties": {
+        "seLinuxOptions": {
+          "$ref": "#/$defs/SELinuxOptions"
+        },
+        "windowsOptions": {
+          "$ref": "#/$defs/WindowsSecurityContextOptions"
+        },
+        "runAsUser": {
+          "type": "integer"
+        },
+        "runAsGroup": {
+          "type": "integer"
+        },
+        "runAsNonRoot": {
+          "type": "boolean"
+        },
+        "supplementalGroups": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "fsGroup": {
+          "type": "integer"
+        },
+        "sysctls": {
+          "items": {
+            "$ref": "#/$defs/Sysctl"
+          },
+          "type": "array"
+        },
+        "fsGroupChangePolicy": {
+          "type": "string"
+        },
+        "seccompProfile": {
+          "$ref": "#/$defs/SeccompProfile"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PodsMetricSource": {
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/MetricIdentifier"
+        },
+        "target": {
+          "$ref": "#/$defs/MetricTarget"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "metric",
+        "target"
+      ]
+    },
+    "PreferredSchedulingTerm": {
+      "properties": {
+        "weight": {
+          "type": "integer"
+        },
+        "preference": {
+          "$ref": "#/$defs/NodeSelectorTerm"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "weight",
+        "preference"
+      ]
+    },
+    "Probe": {
+      "properties": {
+        "exec": {
+          "$ref": "#/$defs/ExecAction"
+        },
+        "httpGet": {
+          "$ref": "#/$defs/HTTPGetAction"
+        },
+        "tcpSocket": {
+          "$ref": "#/$defs/TCPSocketAction"
+        },
+        "grpc": {
+          "$ref": "#/$defs/GRPCAction"
+        },
+        "initialDelaySeconds": {
+          "type": "integer"
+        },
+        "timeoutSeconds": {
+          "type": "integer"
+        },
+        "periodSeconds": {
+          "type": "integer"
+        },
+        "successThreshold": {
+          "type": "integer"
+        },
+        "failureThreshold": {
+          "type": "integer"
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Quantity": {
+      "properties": {
+        "Format": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "Format"
+      ]
+    },
+    "ResourceClaim": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name"
+      ]
+    },
+    "ResourceFieldSelector": {
+      "properties": {
+        "containerName": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "divisor": {
+          "$ref": "#/$defs/Quantity"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "resource"
+      ]
+    },
+    "ResourceList": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Quantity"
+      },
+      "type": "object"
+    },
+    "ResourceMetricSource": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/MetricTarget"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "target"
+      ]
+    },
+    "ResourceRequirements": {
+      "properties": {
+        "limits": {
+          "$ref": "#/$defs/ResourceList"
+        },
+        "requests": {
+          "$ref": "#/$defs/ResourceList"
+        },
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/ResourceClaim"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "RollingUpdateDeployment": {
+      "properties": {
+        "maxUnavailable": {
+          "$ref": "#/$defs/IntOrString"
+        },
+        "maxSurge": {
+          "$ref": "#/$defs/IntOrString"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "SELinuxOptions": {
+      "properties": {
+        "user": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "level": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ScaleResource": {
+      "properties": {
+        "metricName": {
+          "type": "string"
+        },
+        "windowSize": {
+          "type": "string"
+        },
+        "threshold": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "threshold"
+      ]
+    },
+    "ScaleToZeroSpec": {
+      "properties": {
+        "scaleResources": {
+          "items": {
+            "$ref": "#/$defs/ScaleResource"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "SeccompProfile": {
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "localhostProfile": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "type"
+      ]
+    },
+    "SecretEnvSource": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "optional": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "SecretKeySelector": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "optional": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "key"
+      ]
+    },
+    "SecurityContext": {
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "privileged": {
+          "type": "boolean"
+        },
+        "seLinuxOptions": {
+          "$ref": "#/$defs/SELinuxOptions"
+        },
+        "windowsOptions": {
+          "$ref": "#/$defs/WindowsSecurityContextOptions"
+        },
+        "runAsUser": {
+          "type": "integer"
+        },
+        "runAsGroup": {
+          "type": "integer"
+        },
+        "runAsNonRoot": {
+          "type": "boolean"
+        },
+        "readOnlyRootFilesystem": {
+          "type": "boolean"
+        },
+        "allowPrivilegeEscalation": {
+          "type": "boolean"
+        },
+        "procMount": {
+          "type": "string"
+        },
+        "seccompProfile": {
+          "$ref": "#/$defs/SeccompProfile"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Spec": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "disable": {
+          "type": "boolean"
+        },
+        "publish": {
+          "type": "boolean"
+        },
+        "handler": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "env": {
+          "items": {
+            "$ref": "#/$defs/EnvVar"
+          },
+          "type": "array"
+        },
+        "envFrom": {
+          "items": {
+            "$ref": "#/$defs/EnvFromSource"
+          },
+          "type": "array"
+        },
+        "resources": {
+          "$ref": "#/$defs/ResourceRequirements"
+        },
+        "image": {
+          "type": "string"
+        },
+        "imageHash": {
+          "type": "string"
+        },
+        "replicas": {
+          "type": "integer"
+        },
+        "minReplicas": {
+          "type": "integer"
+        },
+        "maxReplicas": {
+          "type": "integer"
+        },
+        "targetCPU": {
+          "type": "integer"
+        },
+        "dataBindings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DataBinding"
+          },
+          "type": "object"
+        },
+        "triggers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Trigger"
+          },
+          "type": "object"
+        },
+        "volumes": {
+          "items": {
+            "$ref": "#/$defs/Volume"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "integer"
+        },
+        "alias": {
+          "type": "string"
+        },
+        "build": {
+          "$ref": "#/$defs/Build"
+        },
+        "runRegistry": {
+          "type": "string"
+        },
+        "imagePullSecrets": {
+          "type": "string"
+        },
+        "runtimeAttributes": {
+          "type": "object"
+        },
+        "loggerSinks": {
+          "items": {
+            "$ref": "#/$defs/LoggerSink"
+          },
+          "type": "array"
+        },
+        "dealerURI": {
+          "type": "string"
+        },
+        "platform": {
+          "$ref": "#/$defs/Platform"
+        },
+        "readinessTimeoutSeconds": {
+          "type": "integer"
+        },
+        "serviceType": {
+          "type": "string"
+        },
+        "imagePullPolicy": {
+          "type": "string"
+        },
+        "securityContext": {
+          "$ref": "#/$defs/PodSecurityContext"
+        },
+        "serviceAccount": {
+          "type": "string"
+        },
+        "scaleToZero": {
+          "$ref": "#/$defs/ScaleToZeroSpec"
+        },
+        "disableDefaultHTTPTrigger": {
+          "type": "boolean"
+        },
+        "disableSensitiveFieldsMasking": {
+          "type": "boolean"
+        },
+        "devices": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "affinity": {
+          "$ref": "#/$defs/Affinity"
+        },
+        "nodeSelector": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "nodeName": {
+          "type": "string"
+        },
+        "tolerations": {
+          "items": {
+            "$ref": "#/$defs/Toleration"
+          },
+          "type": "array"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "preemptionPolicy": {
+          "type": "string"
+        },
+        "deploymentStrategy": {
+          "$ref": "#/$defs/DeploymentStrategy"
+        },
+        "hostIPC": {
+          "type": "boolean"
+        },
+        "customScalingMetricSpecs": {
+          "items": {
+            "$ref": "#/$defs/MetricSpec"
+          },
+          "type": "array"
+        },
+        "autoScaleMetrics": {
+          "items": {
+            "$ref": "#/$defs/AutoScaleMetric"
+          },
+          "type": "array"
+        },
+        "waitReadinessTimeoutBeforeFailure": {
+          "type": "boolean"
+        },
+        "eventTimeout": {
+          "type": "string"
+        },
+        "preemptionMode": {
+          "type": "string"
+        },
+        "sidecars": {
+          "items": {
+            "$ref": "#/$defs/Container"
+          },
+          "type": "array"
+        },
+        "initContainers": {
+          "items": {
+            "$ref": "#/$defs/Container"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "eventTimeout"
+      ]
+    },
+    "Sysctl": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "value"
+      ]
+    },
+    "TCPSocketAction": {
+      "properties": {
+        "port": {
+          "$ref": "#/$defs/IntOrString"
+        },
+        "host": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "port"
+      ]
+    },
+    "Toleration": {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "effect": {
+          "type": "string"
+        },
+        "tolerationSeconds": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Trigger": {
+      "properties": {
+        "class": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "disabled": {
+          "type": "boolean"
+        },
+        "numWorkers": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "partitions": {
+          "items": {
+            "$ref": "#/$defs/Partition"
+          },
+          "type": "array"
+        },
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "workerAvailabilityTimeoutMilliseconds": {
+          "type": "integer"
+        },
+        "workerAllocatorName": {
+          "type": "string"
+        },
+        "explicitAckMode": {
+          "type": "string"
+        },
+        "waitExplicitAckDuringRebalanceTimeout": {
+          "type": "string"
+        },
+        "workerTerminationTimeout": {
+          "type": "string"
+        },
+        "total_tasks": {
+          "type": "integer"
+        },
+        "max_task_allocation": {
+          "type": "integer"
+        },
+        "attributes": {
+          "type": "object"
+        },
+        "maxWorkers": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "class",
+        "kind",
+        "name"
+      ]
+    },
+    "Volume": {
+      "properties": {
+        "volume": {
+          "$ref": "#/$defs/Volume"
+        },
+        "volumeMount": {
+          "$ref": "#/$defs/VolumeMount"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "VolumeDevice": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "devicePath": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "devicePath"
+      ]
+    },
+    "VolumeMount": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "subPath": {
+          "type": "string"
+        },
+        "mountPropagation": {
+          "type": "string"
+        },
+        "subPathExpr": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "mountPath"
+      ]
+    },
+    "WeightedPodAffinityTerm": {
+      "properties": {
+        "weight": {
+          "type": "integer"
+        },
+        "podAffinityTerm": {
+          "$ref": "#/$defs/PodAffinityTerm"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "weight",
+        "podAffinityTerm"
+      ]
+    },
+    "WindowsSecurityContextOptions": {
+      "properties": {
+        "gmsaCredentialSpecName": {
+          "type": "string"
+        },
+        "gmsaCredentialSpec": {
+          "type": "string"
+        },
+        "runAsUserName": {
+          "type": "string"
+        },
+        "hostProcess": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    }
+  }
+}
