@@ -1,0 +1,21 @@
+{{ if ne .Long "" -}}
+## {{ .Use }}
+
+{{ .Long }}
+
+{{ end -}}
+{{ if gt (len .Aliases) 0 -}}
+### Aliases
+
+{{ range .Aliases -}}
+* {{.}}
+{{ end -}}
+{{ end -}}
+{{ if gt (len .Examples) 0 -}}
+### Examples
+{{ .Examples }}
+{{ end -}}
+{{ if gt (len .Flags) 0 -}}
+### Flags
+{{ .Flags }}
+{{ end -}}
