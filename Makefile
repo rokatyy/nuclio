@@ -875,13 +875,11 @@ modules: ensure-gopath
 targets:
 	@awk -F: '/^[^ \t="]+:/ && !/PHONY/ {print $$1}' Makefile | sort -u
 
-# Runs from host to allow full control over Kubernetes cluster
 .PHONY: generate-nuctl-docs
 generate-nuctl-docs:
 	go run \
 		pkg/nuctl/generator/docs.go \
- 		$(NUCTL_DOCUMENTATION_PATH) \
-
+ 		$(NUCTL_DOCUMENTATION_PATH)
 #
 # PATCH REMOTE SYSTEM
 #
