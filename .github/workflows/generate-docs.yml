@@ -42,6 +42,9 @@ jobs:
           if [[ -n $(git status --porcelain docs/reference/nuctl/cli-docs) ]]; then
             echo "Documentation needs to be regenerated."
             echo "::error::Documentation needs to be regenerated. Please run 'make generate-nuctl-docs' and commit the changes."
+            git diff > new_state.diff
+            echo "Differences between current and generated state:"
+            diff current_state.diff new_state.diff || true
             exit 1
           else
             echo "No changes in documentation."

@@ -18,10 +18,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/nuclio/nuclio/pkg/nuctl/command"
-	"github.com/spf13/cobra/doc"
 	"log"
 	"os"
+
+	"github.com/nuclio/nuclio/pkg/nuctl/command"
+
+	"github.com/spf13/cobra/doc"
 )
 
 func main() {
