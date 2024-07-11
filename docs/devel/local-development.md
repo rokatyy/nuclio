@@ -85,7 +85,7 @@ docker run --rm -d -p 5000:5000 registry:2
    ```
    2. Run it.
    
-
+ jdoi;ieoifo
 6. Run UI:
    1. Open `pkg/dashboard/ui` in a terminal
    2. Run:
