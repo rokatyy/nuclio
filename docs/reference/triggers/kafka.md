@@ -293,7 +293,7 @@ response.ensure_no_ack()
 ```
 
 To explicitly commit the offset on an event, save the relevant event information in the `QualifiedOffset` object, 
-and pass it to asynchronous function `explicit_ack()` method of the context's response object, like so:
+and pass it to async function `explicit_ack()` method of the context's response object, like so:
 ```py
 qualified_offset = nuclio.QualifiedOffset.from_event(event)
 await context.platform.explicit_ack(qualified_offset)
@@ -313,7 +313,7 @@ Default value is `100ms`. It can be also set via function annotation `nuclio.io/
 
 
 **NOTES**:
-* Currently, the ExplicitAck feature is only available for python runtime and functions that have a stream trigger (kafka/v3io).
+* Currently, the Explicit Ack feature is only available for python runtime and functions that have a stream trigger (kafka/v3io).
 * The explicit ack feature can be enabled only when using a static worker allocation mode. Meaning that the function metadata must have the following annotation: `"nuclio.io/kafka-worker-allocation-mode":"static"`.
 * The `QualifiedOffset` object can be saved in a persistent storage and used to commit the offset on later invocation of the function.
 

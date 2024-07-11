@@ -115,7 +115,7 @@ $ nuctl get function --namespace nuclio
 
 ```
 
-To illustrate that the function is indeed accessible via HTTP, you'll use [httpie](https://httpie.org) to invoke
+To illustrate that the function is indeed accessible via HTTP, you'll use [HTTPie](https://httpie.org) to invoke
 the function at the port specified by the deployment log:
 
 ```sh
@@ -345,7 +345,7 @@ Kubernetes network, you can do so in one of 2 ways during deployment, both contr
 2. Configure the function to use [serviceType](../reference/triggers/http.html#attributes) of type `nodePort`.
 
 If you are deploying the function using [nuctl](../reference/nuctl/nuctl.md) CLI, you can also configure a `nodePort` easily by using the
-`--http-trigger-service-type=nodePort` CLI arg.
+`--http-trigger-service-type=nodePort` CLI argument.
 
 <a id="whats-next"></a>
 ## What's next?
