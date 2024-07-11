@@ -29,5 +29,4 @@ jobs:
       - uses: errata-ai/vale-action@reviewdog
         with:
           reporter: github-pr-check
-          fail_on_error: false
 
