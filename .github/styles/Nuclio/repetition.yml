@@ -12,16 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-extends: existence
-message: "Use a gender-neutral pronoun instead of '%s'."
+extends: repetition
+message: "'%s' is repeated!"
 level: error
-ignorecase: true
+alpha: true
 tokens:
-  - he/she
-  - s/he
-  - \(s\)he
-  - \bhe\b
-  - \bhim\b
-  - \bhis\b
-  - \bshe\b
-  - \bher\b
+  - '[^\s]+'
