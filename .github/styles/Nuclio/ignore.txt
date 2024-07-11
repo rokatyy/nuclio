@@ -1,6 +1,5 @@
-Nuclio
-Nuclio's
-nuclio
+[Nn]uclio's
+[Nn]uclio
 Iguazio's
 Iguazio
 dev
@@ -17,7 +16,9 @@ Minikube
 Dockerfile
 runtime
 runtimes
+runtime's
 namespace
+namespaces
 CPU
 GPU
 HTTP
@@ -39,6 +40,7 @@ Kinesis
 Cron
 retryable
 boolean
+bool
 CLI
 CLI's
 rebalancing
@@ -58,3 +60,13 @@ ExplicitAck
 asyncio
 Goland
 deserialization
+Untags
+untags
+toolchain
+Grafana
+yaml
+CRD
+CRDs
+repo
+repos
+backoff
