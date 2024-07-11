@@ -1,4 +1,7 @@
 Nuclio
+Nuclio's
+nuclio
+Iguazio's
 Iguazio
 dev
 kubeconfig
@@ -7,11 +10,13 @@ Kubeflow
 serverless
 Katacode
 Cron
+Serverless
 config
 api
 Minikube
 Dockerfile
 runtime
+runtimes
 namespace
 CPU
 GPU
@@ -26,6 +31,8 @@ stdin
 Gradle
 npm
 Nuctl
+nuctl
+Webadmin
 ACK
 NACK
 Kinesis
@@ -33,6 +40,7 @@ Cron
 retryable
 boolean
 CLI
+CLI's
 rebalancing
 rebalance
 OAuth
@@ -43,3 +51,5 @@ SDK
 deployer
 multithreading
 GitHub
+Sarama
+kubectl
