@@ -69,3 +69,5 @@ Unexported
 jessie
 uber
 instantiatable
+gnupg
+gpg
