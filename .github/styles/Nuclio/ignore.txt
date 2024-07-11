@@ -1,5 +1,3 @@
-Iguazio's
-Iguazio
 dev
 kubeconfig
 MLRun
@@ -68,3 +66,4 @@ CRDs
 repo
 repos
 backoff
+liveness

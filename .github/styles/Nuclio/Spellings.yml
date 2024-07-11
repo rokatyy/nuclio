@@ -17,4 +17,10 @@ message: "Did you really mean '%s'?"
 level: warning
 ignore:
   - Nuclio/ignore.txt
-  - '[Nn]uclio'
+filters:
+  - "[Nn]uclio('s)?"
+  - "[Ii]guazio('s)?"
+  - "[Gg]ateway('s)?"
+  - "Dockerfile(s)?"
+  - "[a-z]+[A-Z][a-zA-Z]*|[a-z]+(_[a-z]+)+"
+
