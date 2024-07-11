@@ -17,3 +17,4 @@ message: "Did you really mean '%s'?"
 level: warning
 ignore:
   - Nuclio/ignore.txt
+  - '[Nn]uclio'
