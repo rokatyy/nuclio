@@ -47,9 +47,14 @@ OAuth
 Kerberos
 sharding
 RPC
+RPC's
 SDK
 deployer
 multithreading
 GitHub
 Sarama
 kubectl
+ExplicitAck
+asyncio
+Goland
+deserialization
