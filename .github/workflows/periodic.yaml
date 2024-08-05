@@ -14,9 +14,13 @@
 #
 name: Periodic
 
+
 on:
-  schedule:
-  - cron:  '0 */12 * * *'
+  pull_request:
+    branches:
+      - development
+      - "[0-9]+.[0-9]+.x"
+
 
 env:
   DOCKER_BUILDKIT: 1
