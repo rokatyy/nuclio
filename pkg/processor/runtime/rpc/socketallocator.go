@@ -49,7 +49,57 @@ func (sa *SocketAllocator) startListeners() error {
 	return nil
 }
 
-func (sa *SocketAllocator) GetSocketAddresses() ([]string, string) {
+func (sa *SocketAllocator) start() error {
+	var err error
+	for _, socket := range sa.eventSockets {
+		if socket.conn, err = socket.listener.Accept(); err != nil {
+			return errors.Wrap(err, "Can't get connection from wrapper")
+		}
+		socket.encoder = sa.runtime.runtime.GetEventEncoder(socket.conn)
+		socket.resultChan = make(chan *batchedResults)
+		socket.cancelChan = make(chan struct{})
+		go socket.runHandler()
+	}
+	sa.logger.Debug("Events sockets established connection")
+
+	if sa.runtime.SupportsControlCommunication() {
+		sa.logger.DebugWith("Creating control connection",
+			"wid", sa.runtime.Context.WorkerID)
+		sa.controlMessageSocket.conn, err = sa.controlMessageSocket.listener.Accept()
+		if err != nil {
+			return errors.Wrap(err, "Can't get control connection from wrapper")
+		}
+		sa.controlMessageSocket.encoder = sa.runtime.runtime.GetEventEncoder(sa.controlMessageSocket.conn)
+
+		// initialize control message broker
+		sa.runtime.ControlMessageBroker = NewRpcControlMessageBroker(
+			sa.controlMessageSocket.encoder,
+			sa.logger,
+			sa.runtime.configuration.ControlMessageBroker)
+
+		go sa.controlMessageSocket.runHandler()
+
+		sa.logger.DebugWith("Control connection created",
+			"wid", sa.runtime.Context.WorkerID)
+	}
+
+	// wait for start if required to
+	if sa.runtime.WaitForStart() {
+		sa.logger.Debug("Waiting for start")
+		for _, socket := range sa.eventSockets {
+			<-socket.startChan
+		}
+	}
+
+	sa.logger.Debug("Socker allocator started")
+	return nil
+}
+
+func (sa *SocketAllocator) Allocate() *EventSocket {
+	return sa.eventSockets[0]
+}
+
+func (sa *SocketAllocator) getSocketAddresses() ([]string, string) {
 	eventAddresses := make([]string, 0)
 
 	for _, socket := range sa.eventSockets {

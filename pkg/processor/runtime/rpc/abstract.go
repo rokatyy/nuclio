@@ -311,7 +311,7 @@ func (r *AbstractRuntime) startWrapper() error {
 		return errors.Wrap(err, "Failed to create process waiter")
 	}
 
-	wrapperProcess, err := r.runtime.RunWrapper(r.socketAllocator.GetSocketAddresses())
+	wrapperProcess, err := r.runtime.RunWrapper(r.socketAllocator.getSocketAddresses())
 	if err != nil {
 		return errors.Wrap(err, "Can't run wrapper")
 	}
@@ -320,190 +320,14 @@ func (r *AbstractRuntime) startWrapper() error {
 
 	go r.watchWrapperProcess()
 
-	// event connection
-	eventConnection.conn, err = eventConnection.listener.Accept()
-	if err != nil {
-		return errors.Wrap(err, "Can't get connection from wrapper")
-	}
-
-	r.Logger.InfoWith("Wrapper connected",
-		"wid", r.Context.WorkerID,
-		"pid", r.wrapperProcess.Pid)
-
-	r.eventEncoder = r.runtime.GetEventEncoder(eventConnection.conn)
-	r.resultChan = make(chan *batchedResults)
-	r.cancelHandlerChan = make(chan struct{})
-	go r.eventWrapperOutputHandler(eventConnection.conn, r.resultChan)
-
-	// control connection
-	if r.runtime.SupportsControlCommunication() {
-
-		r.Logger.DebugWith("Creating control connection",
-			"wid", r.Context.WorkerID)
-		controlConnection.conn, err = controlConnection.listener.Accept()
-		if err != nil {
-			return errors.Wrap(err, "Can't get control connection from wrapper")
-		}
-
-		r.controlEncoder = r.runtime.GetEventEncoder(controlConnection.conn)
-
-		// initialize control message broker
-		r.ControlMessageBroker = NewRpcControlMessageBroker(r.controlEncoder, r.Logger, r.configuration.ControlMessageBroker)
-
-		go r.controlOutputHandler(controlConnection.conn)
-
-		r.Logger.DebugWith("Control connection created",
-			"wid", r.Context.WorkerID)
-	}
-
-	// wait for start if required to
-	if r.runtime.WaitForStart() {
-		r.Logger.Debug("Waiting for start")
-
-		<-r.startChan
-	}
-
-	r.Logger.Debug("Started")
-
-	return nil
-}
-
-// Create a listener on unix domain docker, return listener, path to socket and error
-func (r *AbstractRuntime) createSocketConnection(connection *socketConnection) error {
-	var err error
-	if r.runtime.GetSocketType() == UnixSocket {
-		connection.listener, connection.address, err = r.createUnixListener()
-	} else {
-		connection.listener, connection.address, err = r.createTCPListener()
-	}
-
-	if err != nil {
-		return errors.Wrap(err, "Can't create listener")
+	if err := r.socketAllocator.start(); err != nil {
+		return errors.Wrap(err, "Failed to start socket allocator")
 	}
 
 	return nil
 }
 
-// Create a listener on unix domain docker, return listener, path to socket and error
-func (r *AbstractRuntime) createUnixListener() (net.Listener, string, error) {
-	socketPath := fmt.Sprintf(socketPathTemplate, xid.New().String())
 
-	if common.FileExists(socketPath) {
-		if err := os.Remove(socketPath); err != nil {
-			return nil, "", errors.Wrapf(err, "Can't remove socket at %q", socketPath)
-		}
-	}
-
-	r.Logger.DebugWith("Creating listener socket", "path", socketPath)
-
-	listener, err := net.Listen("unix", socketPath)
-	if err != nil {
-		return nil, "", errors.Wrapf(err, "Can't listen on %s", socketPath)
-	}
-
-	unixListener, ok := listener.(*net.UnixListener)
-	if !ok {
-		return nil, "", fmt.Errorf("Can't get underlying Unix listener")
-	}
-
-	if err = unixListener.SetDeadline(time.Now().Add(connectionTimeout)); err != nil {
-		return nil, "", errors.Wrap(err, "Can't set deadline")
-	}
-
-	return listener, socketPath, nil
-}
-
-// Create a listener on TCP docker, return listener, port and error
-func (r *AbstractRuntime) createTCPListener() (net.Listener, string, error) {
-	listener, err := net.Listen("tcp", ":0")
-	if err != nil {
-		return nil, "", errors.Wrap(err, "Can't find free port")
-	}
-
-	tcpListener, ok := listener.(*net.TCPListener)
-	if !ok {
-		return nil, "", errors.Wrap(err, "Can't get underlying TCP listener")
-	}
-	if err = tcpListener.SetDeadline(time.Now().Add(connectionTimeout)); err != nil {
-		return nil, "", errors.Wrap(err, "Can't set deadline")
-	}
-
-	port := listener.Addr().(*net.TCPAddr).Port
-
-	return listener, fmt.Sprintf("%d", port), nil
-}
-
-func (r *AbstractRuntime) controlOutputHandler(conn io.Reader) {
-
-	// recover from panic in case of error
-	defer common.CatchAndLogPanicWithOptions(context.Background(), // nolint: errcheck
-		r.Logger,
-		"control wrapper output handler (Restart called?)",
-		&common.CatchAndLogPanicOptions{
-			Args:          nil,
-			CustomHandler: nil,
-		})
-	defer func() {
-		r.cancelHandlerChan <- struct{}{}
-	}()
-
-	outReader := bufio.NewReader(conn)
-
-	// keep a counter for log throttling
-	errLogCounter := 0
-	logCounterTime := time.Now()
-
-	for {
-		select {
-
-		// TODO: sync between event and control output handlers using a shared context
-		case <-r.cancelHandlerChan:
-			r.Logger.Warn("Control output handler was canceled (Restart called?)")
-			return
-
-		default:
-
-			// read control message
-			controlMessage, err := r.ControlMessageBroker.ReadControlMessage(outReader)
-			if err != nil {
-
-				// if enough time has passed, log the error
-				if time.Since(logCounterTime) > 500*time.Millisecond {
-					logCounterTime = time.Now()
-					errLogCounter = 0
-				}
-				if errLogCounter%5 == 0 {
-					r.Logger.WarnWith(string(common.FailedReadControlMessage),
-						"errRootCause", errors.RootCause(err).Error())
-					errLogCounter++
-				}
-
-				// if error is EOF it means the connection was closed, so we should exit
-				if errors.RootCause(err) == io.EOF {
-					r.Logger.Debug("Control connection was closed")
-					return
-				}
-
-				continue
-			} else {
-				errLogCounter = 0
-			}
-
-			r.Logger.DebugWith("Received control message", "messageKind", controlMessage.Kind)
-
-			// send message to control consumers
-			if err := r.GetControlMessageBroker().SendToConsumers(controlMessage); err != nil {
-				r.Logger.WarnWith("Failed to send control message to consumers", "err", err.Error())
-			}
-
-			// TODO: validate and respond to wrapper process
-		}
-	}
-}
-
-func (r *AbstractRuntime) handleStart() {
-	r.startChan <- struct{}{}
-}
 
 // resolveFunctionLogger return either functionLogger if provided or root Logger if not
 func (r *AbstractRuntime) resolveFunctionLogger() logger.Logger {

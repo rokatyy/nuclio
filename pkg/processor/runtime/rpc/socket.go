@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"github.com/nuclio/errors"
+	"time"
 
 	"github.com/nuclio/logger"
 	"github.com/nuclio/nuclio/pkg/common"
@@ -39,35 +41,112 @@ type socketConnection struct {
 }
 
 type ControlMessageSocket struct {
-	Logger    logger.Logger
-	outReader *bufio.Reader
-	runtime   *AbstractRuntime
-	*socketConnection
+	*AbstractSocket
 }
 
-func NewControlMessageSocket(logger logger.Logger, connection *socketConnection, runtime *AbstractRuntime) *ControlMessageSocket {
-	return &ControlMessageSocket{Logger: logger, socketConnection: connection, runtime: runtime}
+func NewControlMessageSocket(logger logger.Logger, socketConnection *socketConnection, runtime *AbstractRuntime) *ControlMessageSocket {
+	abstractSocket := &AbstractSocket{socketConnection: socketConnection, Logger: logger, runtime: runtime}
+	return &ControlMessageSocket{AbstractSocket: abstractSocket}
 }
 
-type EventSocket struct {
-	*socketConnection
-	Logger    logger.Logger
-	outReader *bufio.Reader
-	runtime   *AbstractRuntime
+func (cm *ControlMessageSocket) runHandler() {
 
-	resultChan chan *batchedResults
+	// recover from panic in case of error
+	defer common.CatchAndLogPanicWithOptions(context.Background(), // nolint: errcheck
+		cm.Logger,
+		"control wrapper output handler (Restart called?)",
+		&common.CatchAndLogPanicOptions{
+			Args:          nil,
+			CustomHandler: nil,
+		})
+	defer func() {
+		cm.cancelChan <- struct{}{}
+	}()
+
+	outReader := bufio.NewReader(cm.conn)
+
+	// keep a counter for log throttling
+	errLogCounter := 0
+	logCounterTime := time.Now()
+
+	for {
+		select {
+
+		// TODO: sync between event and control output handlers using a shared context
+		case <-cm.cancelChan:
+			cm.Logger.Warn("Control output handler was canceled (Restart called?)")
+			return
+
+		default:
+
+			// read control message
+			controlMessage, err := cm.runtime.ControlMessageBroker.ReadControlMessage(outReader)
+			if err != nil {
+
+				// if enough time has passed, log the error
+				if time.Since(logCounterTime) > 500*time.Millisecond {
+					logCounterTime = time.Now()
+					errLogCounter = 0
+				}
+				if errLogCounter%5 == 0 {
+					cm.Logger.WarnWith(string(common.FailedReadControlMessage),
+						"errRootCause", errors.RootCause(err).Error())
+					errLogCounter++
+				}
+
+				// if error is EOF it means the connection was closed, so we should exit
+				if errors.RootCause(err) == io.EOF {
+					cm.Logger.Debug("Control connection was closed")
+					return
+				}
+
+				continue
+			} else {
+				errLogCounter = 0
+			}
+
+			cm.Logger.DebugWith("Received control message", "messageKind", controlMessage.Kind)
+
+			// send message to control consumers
+			if err := cm.runtime.GetControlMessageBroker().SendToConsumers(controlMessage); err != nil {
+				cm.Logger.WarnWith("Failed to send control message to consumers", "err", err.Error())
+			}
+
+			// TODO: validate and respond to wrapper process
+		}
+	}
+}
+
+type AbstractSocket struct {
+	*socketConnection
+	Logger     logger.Logger
+	outReader  *bufio.Reader
+	runtime    *AbstractRuntime
+	encoder    EventEncoder
 	cancelChan chan struct{}
 }
 
+func NewAbstractSocker(socketConnection *socketConnection, logger logger.Logger, runtime *AbstractRuntime) *AbstractSocket {
+	return &AbstractSocket{socketConnection: socketConnection, Logger: logger, runtime: runtime}
+}
+
+type EventSocket struct {
+	*AbstractSocket
+	resultChan chan *batchedResults
+	startChan  chan struct{}
+}
+
 func NewEventSocket(logger logger.Logger, socketConnection *socketConnection, runtime *AbstractRuntime) *EventSocket {
-	return &EventSocket{socketConnection: socketConnection, Logger: logger, runtime: runtime}
+
+	abstractSocket := &AbstractSocket{socketConnection: socketConnection, Logger: logger, runtime: runtime}
+	return &EventSocket{AbstractSocket: abstractSocket}
 }
 
 func (s *EventSocket) waitOutput(conn io.Reader, resultChan chan *batchedResults) {
 
 }
 
-func (s *EventSocket) eventWrapperOutputHandler(conn io.Reader, resultChan chan *batchedResults) {
+func (s *EventSocket) runHandler() {
 
 	// Reset might close outChan, which will cause panic when sending
 	defer common.CatchAndLogPanicWithOptions(context.Background(), // nolint: errcheck
@@ -81,7 +160,7 @@ func (s *EventSocket) eventWrapperOutputHandler(conn io.Reader, resultChan chan 
 		s.cancelChan <- struct{}{}
 	}()
 
-	outReader := bufio.NewReader(conn)
+	outReader := bufio.NewReader(s.conn)
 
 	// Read logs & output
 	for {
@@ -101,7 +180,7 @@ func (s *EventSocket) eventWrapperOutputHandler(conn io.Reader, resultChan chan 
 			if unmarshalledResults.err != nil {
 				s.Logger.WarnWith(string(common.FailedReadFromEventConnection),
 					"err", unmarshalledResults.err.Error())
-				resultChan <- unmarshalledResults
+				s.resultChan <- unmarshalledResults
 				continue
 			}
 
@@ -110,7 +189,7 @@ func (s *EventSocket) eventWrapperOutputHandler(conn io.Reader, resultChan chan 
 				unmarshalResponseData(s.Logger, data[1:], unmarshalledResults)
 
 				// write back to result channel
-				resultChan <- unmarshalledResults
+				s.resultChan <- unmarshalledResults
 			case 'm':
 				s.handleResponseMetric(data[1:])
 			case 'l':
@@ -175,5 +254,5 @@ func (s *EventSocket) resolveFunctionLogger(functionLogger logger.Logger) logger
 }
 
 func (s *EventSocket) handleStart() {
-	r.startChan <- struct{}{}
+	s.startChan <- struct{}{}
 }
