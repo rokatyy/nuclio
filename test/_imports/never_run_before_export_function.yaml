@@ -7,7 +7,6 @@ metadata:
 spec:
   alias: latest
   build:
-    baseImage: quay.io/mlrun/mlrun:1.7.0-rc45
     codeEntryType: image
     image: ""
     noBaseImagesPull: true
