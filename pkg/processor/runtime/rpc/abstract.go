@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"syscall"
 	"time"
@@ -46,33 +45,6 @@ const (
 	connectionTimeout  = 2 * time.Minute
 )
 
-type socketConnection struct {
-	conn     net.Conn
-	listener net.Listener
-	address  string
-}
-
-type result struct {
-	StatusCode   int                    `json:"status_code"`
-	ContentType  string                 `json:"content_type"`
-	Body         string                 `json:"body"`
-	BodyEncoding string                 `json:"body_encoding"`
-	Headers      map[string]interface{} `json:"headers"`
-	EventId      string                 `json:"event_id"`
-
-	DecodedBody []byte
-	err         error
-}
-
-type batchedResults struct {
-	results []*result
-	err     error
-}
-
-func newBatchedResults() *batchedResults {
-	return &batchedResults{results: make([]*result, 0)}
-}
-
 // AbstractRuntime is a runtime that communicates via unix domain socket
 type AbstractRuntime struct {
 	runtime.AbstractRuntime
@@ -80,7 +52,6 @@ type AbstractRuntime struct {
 	eventEncoder      EventEncoder
 	controlEncoder    EventEncoder
 	wrapperProcess    *os.Process
-	resultChan        chan *batchedResults
 	functionLogger    logger.Logger
 	runtime           Runtime
 	startChan         chan struct{}
@@ -88,6 +59,8 @@ type AbstractRuntime struct {
 	cancelHandlerChan chan struct{}
 	socketType        SocketType
 	processWaiter     *processwaiter.ProcessWaiter
+
+	socketAllocator *SocketAllocator
 }
 
 type rpcLogRecord struct {
@@ -107,6 +80,7 @@ func NewAbstractRuntime(logger logger.Logger,
 	if err != nil {
 		return nil, errors.Wrap(err, "Can't create AbstractRuntime")
 	}
+	socketAllocator := NewSocketAllocator(logger.GetChild("socketAllocator")
 
 	newRuntime := &AbstractRuntime{
 		AbstractRuntime: *abstractRuntime,
@@ -115,7 +89,9 @@ func NewAbstractRuntime(logger logger.Logger,
 		startChan:       make(chan struct{}, 1),
 		stopChan:        make(chan struct{}, 1),
 		socketType:      UnixSocket,
+		socketAllocator: socketAllocator,
 	}
+	socketAllocator.runtime = newRuntime
 
 	return newRuntime, nil
 }
@@ -132,7 +108,7 @@ func (r *AbstractRuntime) Start() error {
 
 // ProcessEvent processes an event
 func (r *AbstractRuntime) ProcessEvent(event nuclio.Event, functionLogger logger.Logger) (interface{}, error) {
-	processingResult, err := r.processItemAndWaitForResult(event, functionLogger)
+	processingResult, err := r.allocateSocketAndWaitForResult(event, functionLogger)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +123,7 @@ func (r *AbstractRuntime) ProcessEvent(event nuclio.Event, functionLogger logger
 
 // ProcessBatch processes a batch of events
 func (r *AbstractRuntime) ProcessBatch(batch []nuclio.Event, functionLogger logger.Logger) ([]*runtime.ResponseWithErrors, error) {
-	processingResults, err := r.processItemAndWaitForResult(batch, functionLogger)
+	processingResults, err := r.allocateSocketAndWaitForResult(batch, functionLogger)
 	if err != nil {
 		return nil, err
 	}
@@ -208,20 +184,6 @@ func (r *AbstractRuntime) Restart() error {
 		return err
 	}
 
-	// Send error for current event (non-blocking)
-	select {
-	case r.resultChan <- &batchedResults{
-		results: []*result{{
-			StatusCode: http.StatusRequestTimeout,
-			err:        errors.New("Runtime restarted"),
-		}},
-	}:
-
-	default:
-		r.Logger.Warn("Nothing waiting on result channel during restart. Continuing")
-	}
-
-	close(r.resultChan)
 	if err := r.startWrapper(); err != nil {
 		r.SetStatus(status.Error)
 		return errors.Wrap(err, "Can't start wrapper process")
@@ -290,7 +252,7 @@ func (r *AbstractRuntime) Terminate() error {
 	return nil
 }
 
-func (r *AbstractRuntime) processItemAndWaitForResult(item interface{}, functionLogger logger.Logger) (*batchedResults, error) {
+func (r *AbstractRuntime) allocateSocketAndWaitForResult(item interface{}, functionLogger logger.Logger) (*batchedResults, error) {
 
 	if currentStatus := r.GetStatus(); currentStatus != status.Ready {
 		return nil, errors.Errorf("Processor not ready (current status: %s)", currentStatus)
@@ -340,20 +302,8 @@ func (r *AbstractRuntime) signal(signal syscall.Signal) error {
 }
 
 func (r *AbstractRuntime) startWrapper() error {
-	var (
-		err                                error
-		eventConnection, controlConnection socketConnection
-	)
-
-	// create socket connections
-	if err := r.createSocketConnection(&eventConnection); err != nil {
-		return errors.Wrap(err, "Failed to create socket connection")
-	}
-
-	if r.runtime.SupportsControlCommunication() {
-		if err := r.createSocketConnection(&controlConnection); err != nil {
-			return errors.Wrap(err, "Failed to create socket connection")
-		}
+	err := r.socketAllocator.start(); if err != nil {
+		return errors.Wrap(err, "Failed to start socket allocator")
 	}
 
 	r.processWaiter, err = processwaiter.NewProcessWaiter()
@@ -361,7 +311,7 @@ func (r *AbstractRuntime) startWrapper() error {
 		return errors.Wrap(err, "Failed to create process waiter")
 	}
 
-	wrapperProcess, err := r.runtime.RunWrapper(eventConnection.address, controlConnection.address)
+	wrapperProcess, err := r.runtime.RunWrapper(r.socketAllocator.GetSocketAddresses())
 	if err != nil {
 		return errors.Wrap(err, "Can't run wrapper")
 	}
@@ -483,61 +433,6 @@ func (r *AbstractRuntime) createTCPListener() (net.Listener, string, error) {
 	return listener, fmt.Sprintf("%d", port), nil
 }
 
-func (r *AbstractRuntime) eventWrapperOutputHandler(conn io.Reader, resultChan chan *batchedResults) {
-
-	// Reset might close outChan, which will cause panic when sending
-	defer common.CatchAndLogPanicWithOptions(context.Background(), // nolint: errcheck
-		r.Logger,
-		"handling event wrapper output (Restart called?)",
-		&common.CatchAndLogPanicOptions{
-			Args:          nil,
-			CustomHandler: nil,
-		})
-	defer func() {
-		r.cancelHandlerChan <- struct{}{}
-	}()
-
-	outReader := bufio.NewReader(conn)
-
-	// Read logs & output
-	for {
-		select {
-
-		// TODO: sync between event and control output handlers using a shared context
-		case <-r.cancelHandlerChan:
-			r.Logger.Warn("Event output handler was canceled (Restart called?)")
-			return
-
-		default:
-
-			unmarshalledResults := newBatchedResults()
-			var data []byte
-			data, unmarshalledResults.err = outReader.ReadBytes('\n')
-
-			if unmarshalledResults.err != nil {
-				r.Logger.WarnWith(string(common.FailedReadFromEventConnection),
-					"err", unmarshalledResults.err.Error())
-				resultChan <- unmarshalledResults
-				continue
-			}
-
-			switch data[0] {
-			case 'r':
-				unmarshalResponseData(r.Logger, data[1:], unmarshalledResults)
-
-				// write back to result channel
-				resultChan <- unmarshalledResults
-			case 'm':
-				r.handleResponseMetric(data[1:])
-			case 'l':
-				r.handleResponseLog(data[1:])
-			case 's':
-				r.handleStart()
-			}
-		}
-	}
-}
-
 func (r *AbstractRuntime) controlOutputHandler(conn io.Reader) {
 
 	// recover from panic in case of error
@@ -606,60 +501,16 @@ func (r *AbstractRuntime) controlOutputHandler(conn io.Reader) {
 	}
 }
 
-func (r *AbstractRuntime) handleResponseLog(response []byte) {
-	var logRecord rpcLogRecord
-
-	if err := json.Unmarshal(response, &logRecord); err != nil {
-		r.Logger.ErrorWith("Can't decode log", "error", err)
-		return
-	}
-
-	loggerInstance := r.resolveFunctionLogger(r.functionLogger)
-	logFunc := loggerInstance.DebugWith
-
-	switch logRecord.Level {
-	case "error", "critical", "fatal":
-		logFunc = loggerInstance.ErrorWith
-	case "warning":
-		logFunc = loggerInstance.WarnWith
-	case "info":
-		logFunc = loggerInstance.InfoWith
-	}
-
-	vars := common.MapToSlice(logRecord.With)
-	logFunc(logRecord.Message, vars...)
-}
-
-func (r *AbstractRuntime) handleResponseMetric(response []byte) {
-	var metrics struct {
-		DurationSec float64 `json:"duration"`
-	}
-
-	loggerInstance := r.resolveFunctionLogger(r.functionLogger)
-	if err := json.Unmarshal(response, &metrics); err != nil {
-		loggerInstance.ErrorWith("Can't decode metric", "error", err)
-		return
-	}
-
-	if metrics.DurationSec == 0 {
-		loggerInstance.ErrorWith("No duration in metrics", "metrics", metrics)
-		return
-	}
-
-	r.Statistics.DurationMilliSecondsCount++
-	r.Statistics.DurationMilliSecondsSum += uint64(metrics.DurationSec * 1000)
-}
-
 func (r *AbstractRuntime) handleStart() {
 	r.startChan <- struct{}{}
 }
 
-// resolveFunctionLogger return either functionLogger if provided or root logger if not
-func (r *AbstractRuntime) resolveFunctionLogger(functionLogger logger.Logger) logger.Logger {
-	if functionLogger == nil {
+// resolveFunctionLogger return either functionLogger if provided or root Logger if not
+func (r *AbstractRuntime) resolveFunctionLogger() logger.Logger {
+	if r.functionLogger == nil {
 		return r.Logger
 	}
-	return functionLogger
+	return r.functionLogger
 }
 
 func (r *AbstractRuntime) watchWrapperProcess() {

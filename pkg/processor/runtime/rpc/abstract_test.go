@@ -22,6 +22,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -54,7 +55,7 @@ func newTestRuntime(parentLogger logger.Logger, configuration *runtime.Configura
 
 	newTestRuntime := &testRuntime{}
 
-	newTestRuntime.AbstractRuntime, err = NewAbstractRuntime(parentLogger.GetChild("logger"),
+	newTestRuntime.AbstractRuntime, err = NewAbstractRuntime(parentLogger.GetChild("Logger"),
 		configuration,
 		newTestRuntime)
 
@@ -67,7 +68,10 @@ func newTestRuntime(parentLogger logger.Logger, configuration *runtime.Configura
 	return newTestRuntime, nil
 }
 
-func (r *testRuntime) RunWrapper(eventSocketPath, controlSocketPath string) (*os.Process, error) {
+func (r *testRuntime) RunWrapper(eventSocketPath []string, controlSocketPath string) (*os.Process, error) {
+	if len(eventSocketPath) != 1 {
+		return nil, fmt.Errorf("test runtime doesn't support multiple socket processing yet")
+	}
 	var err error
 	cmd := exec.Command("sleep", "999999")
 	if err = cmd.Start(); err != nil {
@@ -76,7 +80,7 @@ func (r *testRuntime) RunWrapper(eventSocketPath, controlSocketPath string) (*os
 	r.wrapperProcess = cmd.Process
 
 	// Connect to runtime
-	r.eventConn, err = net.Dial("unix", eventSocketPath)
+	r.eventConn, err = net.Dial("unix", eventSocketPath[0])
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +255,7 @@ func (suite *RuntimeSuite) TearDownTest() {
 
 func (suite *RuntimeSuite) createLogger() logger.Logger {
 	loggerInstance, err := nucliozap.NewNuclioZapTest("rpc-runtime-test")
-	suite.Require().NoError(err, "Can't create logger")
+	suite.Require().NoError(err, "Can't create Logger")
 
 	return loggerInstance
 }
