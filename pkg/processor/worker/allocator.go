@@ -300,3 +300,69 @@ func (fp *fixedPool) SignalTermination() error {
 func (fp *fixedPool) IsTerminated() bool {
 	return fp.isTerminated
 }
+
+type socketAllocator struct {
+
+	// accessed atomically, keep as first field for alignment
+	statistics AllocatorStatistics
+
+	logger     logger.Logger
+	workerChan chan *Worker
+	workers    []*Worker
+
+	socketChan chan *Socket
+	sockets    []*Socket
+
+	isTerminated bool
+}
+
+func (sa *socketAllocator) Allocate(timeout time.Duration) (*Socket, error) {
+	if sa.isTerminated {
+		return nil, ErrAllWorkersAreTerminated
+	}
+
+	// we don't want to completely lock here, but we'll use atomic to inc counters where possible
+	atomic.AddUint64(&sa.statistics.WorkerAllocationCount, 1)
+
+	// get total number of workers
+	totalNumberWorkers := len(sa.workers)
+	currentNumberOfAvailableWorkers := len(sa.workerChan)
+	percentageOfAvailableWorkers := float64(currentNumberOfAvailableWorkers*100.0) / float64(totalNumberWorkers)
+
+	// measure how many workers are available in the queue while we're allocating
+	atomic.AddUint64(&sa.statistics.WorkerAllocationWorkersAvailablePercentage, uint64(percentageOfAvailableWorkers))
+
+	// try to allocate a worker and fall back to default immediately if there's none available
+	select {
+	case socketInstance := <-sa.socketChan:
+		atomic.AddUint64(&sa.statistics.WorkerAllocationSuccessImmediateTotal, 1)
+
+		return socketInstance, nil
+	default:
+
+		// if there's no timeout, return now
+		if timeout == 0 {
+			atomic.AddUint64(&sa.statistics.WorkerAllocationTimeoutTotal, 1)
+			return nil, ErrNoAvailableWorkers
+		}
+
+		waitStartAt := time.Now()
+
+		// if there is a timeout, try to allocate while waiting for the time
+		// to pass
+		select {
+		case socketInstance := <-sa.socketChan:
+			atomic.AddUint64(&sa.statistics.WorkerAllocationSuccessAfterWaitTotal, 1)
+			atomic.AddUint64(&sa.statistics.WorkerAllocationWaitDurationMilliSecondsSum,
+				uint64(time.Since(waitStartAt).Nanoseconds()/1e6))
+			return socketInstance, nil
+		case <-time.After(timeout):
+			atomic.AddUint64(&sa.statistics.WorkerAllocationTimeoutTotal, 1)
+			return nil, ErrNoAvailableWorkers
+		}
+	}
+}
+
+func (sa *socketAllocator) Release(socket *Socket) {
+	sa.socketChan <- socket
+}
