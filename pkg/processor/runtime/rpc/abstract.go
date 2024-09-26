@@ -17,13 +17,9 @@ limitations under the License.
 package rpc
 
 import (
-	"bufio"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"syscall"
 	"time"
@@ -36,7 +32,6 @@ import (
 	"github.com/nuclio/errors"
 	"github.com/nuclio/logger"
 	"github.com/nuclio/nuclio-sdk-go"
-	"github.com/rs/xid"
 )
 
 // TODO: Find a better place (both on file system and configuration)
@@ -80,7 +75,7 @@ func NewAbstractRuntime(logger logger.Logger,
 	if err != nil {
 		return nil, errors.Wrap(err, "Can't create AbstractRuntime")
 	}
-	socketAllocator := NewSocketAllocator(logger.GetChild("socketAllocator")
+	socketAllocator := NewSocketAllocator(logger.GetChild("socketAllocator"))
 
 	newRuntime := &AbstractRuntime{
 		AbstractRuntime: *abstractRuntime,
@@ -258,28 +253,14 @@ func (r *AbstractRuntime) allocateSocketAndWaitForResult(item interface{}, funct
 		return nil, errors.Errorf("Processor not ready (current status: %s)", currentStatus)
 	}
 
+	socket := r.socketAllocator.Allocate()
+
 	r.functionLogger = functionLogger
-
-	// We don't use defer to reset r.functionLogger since it decreases performance
-	if err := r.eventEncoder.Encode(item); err != nil {
+	defer func() {
 		r.functionLogger = nil
-		return nil, errors.Wrapf(err, "Can't encode item: %+v", item)
-	}
+	}()
 
-	processingResults, ok := <-r.resultChan
-	r.functionLogger = nil
-	if !ok {
-		msg := "Client disconnected"
-		r.Logger.Error(msg)
-		r.SetStatus(status.Error)
-		r.functionLogger = nil
-		return nil, errors.New(msg)
-	}
-	// if processingResults.err is not nil, it means that whole batch processing was failed
-	if processingResults.err != nil {
-		return nil, processingResults.err
-	}
-	return processingResults, nil
+	return socket.processEvent(item)
 }
 
 func (r *AbstractRuntime) signal(signal syscall.Signal) error {
@@ -302,7 +283,8 @@ func (r *AbstractRuntime) signal(signal syscall.Signal) error {
 }
 
 func (r *AbstractRuntime) startWrapper() error {
-	err := r.socketAllocator.start(); if err != nil {
+	err := r.socketAllocator.start()
+	if err != nil {
 		return errors.Wrap(err, "Failed to start socket allocator")
 	}
 
@@ -326,8 +308,6 @@ func (r *AbstractRuntime) startWrapper() error {
 
 	return nil
 }
-
-
 
 // resolveFunctionLogger return either functionLogger if provided or root Logger if not
 func (r *AbstractRuntime) resolveFunctionLogger() logger.Logger {

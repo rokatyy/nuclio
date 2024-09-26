@@ -22,7 +22,7 @@ type SocketAllocator struct {
 }
 
 func NewSocketAllocator(logger logger.Logger) *SocketAllocator {
-	return &SocketAllocator{logger: logger}
+	return &SocketAllocator{logger: logger, minSocketsNum: 1, maxSocketsNum: 1}
 }
 
 func (sa *SocketAllocator) startListeners() error {

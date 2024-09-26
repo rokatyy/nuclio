@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/nuclio/errors"
+	"github.com/nuclio/nuclio/pkg/common/status"
 	"time"
 
 	"github.com/nuclio/logger"
@@ -38,6 +39,16 @@ type socketConnection struct {
 	conn     net.Conn
 	listener net.Listener
 	address  string
+}
+
+type AbstractSocket struct {
+	*socketConnection
+	Logger     logger.Logger
+	outReader  *bufio.Reader
+	runtime    *AbstractRuntime
+	encoder    EventEncoder
+	cancelChan chan struct{}
+	status     status.Status
 }
 
 type ControlMessageSocket struct {
@@ -117,19 +128,6 @@ func (cm *ControlMessageSocket) runHandler() {
 	}
 }
 
-type AbstractSocket struct {
-	*socketConnection
-	Logger     logger.Logger
-	outReader  *bufio.Reader
-	runtime    *AbstractRuntime
-	encoder    EventEncoder
-	cancelChan chan struct{}
-}
-
-func NewAbstractSocker(socketConnection *socketConnection, logger logger.Logger, runtime *AbstractRuntime) *AbstractSocket {
-	return &AbstractSocket{socketConnection: socketConnection, Logger: logger, runtime: runtime}
-}
-
 type EventSocket struct {
 	*AbstractSocket
 	resultChan chan *batchedResults
@@ -142,8 +140,26 @@ func NewEventSocket(logger logger.Logger, socketConnection *socketConnection, ru
 	return &EventSocket{AbstractSocket: abstractSocket}
 }
 
-func (s *EventSocket) waitOutput(conn io.Reader, resultChan chan *batchedResults) {
+func (s *EventSocket) processEvent(item interface{}) (*batchedResults, error) {
+	// We don't use defer to reset r.functionLogger since it decreases performance
+	if err := s.encoder.Encode(item); err != nil {
+		s.runtime = nil
+		return nil, errors.Wrapf(err, "Can't encode item: %+v", item)
+	}
+	processingResults, ok := <-s.resultChan
+	if !ok {
+		msg := "Client disconnected"
+		s.Logger.Error(msg)
 
+		// TODO: support status for socket separately when implementing multiple socket support
+		s.runtime.SetStatus(status.Error)
+		return nil, errors.New(msg)
+	}
+	// if processingResults.err is not nil, it means that whole batch processing was failed
+	if processingResults.err != nil {
+		return nil, processingResults.err
+	}
+	return processingResults, nil
 }
 
 func (s *EventSocket) runHandler() {
