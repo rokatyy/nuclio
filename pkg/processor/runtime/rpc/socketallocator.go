@@ -121,6 +121,9 @@ func (sa *SocketAllocator) getSocketAddresses() ([]string, string) {
 	for _, socket := range sa.eventSockets {
 		eventAddresses = append(eventAddresses, socket.address)
 	}
+	if sa.controlMessageSocket == nil {
+		return eventAddresses, ""
+	}
 	return eventAddresses, sa.controlMessageSocket.address
 }
 
