@@ -53,7 +53,7 @@ func (sa *SocketAllocator) startListeners() error {
 			sa.runtime)
 	}
 
-	for i := 0; i <= sa.minSocketsNum; i++ {
+	for i := 0; i < sa.minSocketsNum; i++ {
 		eventConnection := &socketConnection{}
 		if err := sa.createSocketConnection(eventConnection); err != nil {
 			return errors.Wrap(err, "Failed to create socket connection")
