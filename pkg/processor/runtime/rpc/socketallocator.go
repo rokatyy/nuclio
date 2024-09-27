@@ -49,9 +49,9 @@ func NewSocketAllocator(logger logger.Logger) *SocketAllocator {
 }
 
 func (sa *SocketAllocator) startListeners() error {
-	var controlConnection *socketConnection
 	if sa.runtime.SupportsControlCommunication() {
-		if err := sa.createSocketConnection(controlConnection); err != nil {
+		controlConnection, err := sa.createSocketConnection()
+		if err != nil {
 			return errors.Wrap(err, "Failed to create socket connection")
 		}
 		sa.controlMessageSocket = NewControlMessageSocket(
@@ -61,8 +61,8 @@ func (sa *SocketAllocator) startListeners() error {
 	}
 
 	for i := 0; i < sa.minSocketsNum; i++ {
-		eventConnection := &socketConnection{}
-		if err := sa.createSocketConnection(eventConnection); err != nil {
+		eventConnection, err := sa.createSocketConnection()
+		if err != nil {
 			return errors.Wrap(err, "Failed to create socket connection")
 		}
 		sa.eventSockets = append(sa.eventSockets, NewEventSocket(sa.logger.GetChild("EventSocket"),
@@ -128,14 +128,22 @@ func (sa *SocketAllocator) getSocketAddresses() ([]string, string) {
 	for _, socket := range sa.eventSockets {
 		eventAddresses = append(eventAddresses, socket.address)
 	}
+
 	if sa.controlMessageSocket == nil {
+		sa.logger.DebugWith("Get socket addresses",
+			"eventAddresses", eventAddresses,
+			"controlAddress", "")
 		return eventAddresses, ""
 	}
+	sa.logger.DebugWith("Get socket addresses",
+		"eventAddresses", eventAddresses,
+		"controlAddress", sa.controlMessageSocket.address)
 	return eventAddresses, sa.controlMessageSocket.address
 }
 
 // Create a listener on unix domain docker, return listener, path to socket and error
-func (sa *SocketAllocator) createSocketConnection(connection *socketConnection) error {
+func (sa *SocketAllocator) createSocketConnection() (*socketConnection, error) {
+	connection := &socketConnection{}
 	var err error
 	if sa.runtime.GetSocketType() == UnixSocket {
 		connection.listener, connection.address, err = sa.createUnixListener()
@@ -143,10 +151,10 @@ func (sa *SocketAllocator) createSocketConnection(connection *socketConnection) 
 		connection.listener, connection.address, err = sa.createTCPListener()
 	}
 	if err != nil {
-		return errors.Wrap(err, "Can't create listener")
+		return nil, errors.Wrap(err, "Can't create listener")
 	}
 
-	return nil
+	return connection, nil
 }
 
 // Create a listener on unix domain docker, return listener, path to socket and error
