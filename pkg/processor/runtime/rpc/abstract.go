@@ -66,7 +66,6 @@ func NewAbstractRuntime(logger logger.Logger,
 	if err != nil {
 		return nil, errors.Wrap(err, "Can't create AbstractRuntime")
 	}
-	socketAllocator := NewSocketAllocator(logger.GetChild("socketAllocator"))
 
 	newRuntime := &AbstractRuntime{
 		AbstractRuntime: *abstractRuntime,
@@ -75,9 +74,7 @@ func NewAbstractRuntime(logger logger.Logger,
 		startChan:       make(chan struct{}, 1),
 		stopChan:        make(chan struct{}, 1),
 		socketType:      UnixSocket,
-		socketAllocator: socketAllocator,
 	}
-	socketAllocator.runtime = newRuntime
 
 	return newRuntime, nil
 }
@@ -274,6 +271,7 @@ func (r *AbstractRuntime) signal(signal syscall.Signal) error {
 }
 
 func (r *AbstractRuntime) startWrapper() error {
+	r.socketAllocator = NewSocketAllocator(r.Logger.GetChild("socketAllocator"), r)
 	var err error
 	if err = r.socketAllocator.startListeners(); err != nil {
 		return errors.Wrap(err, "Failed to start sockets")
