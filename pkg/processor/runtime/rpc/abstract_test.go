@@ -80,7 +80,7 @@ func (r *testRuntime) RunWrapper(eventSocketPaths []string, controlSocketPath st
 	r.wrapperProcess = cmd.Process
 
 	var eventSocketPath string
-	if len(eventSocketPath) == 1 {
+	if len(eventSocketPaths) == 1 {
 		eventSocketPath = eventSocketPaths[0]
 	}
 
