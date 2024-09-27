@@ -68,8 +68,8 @@ func newTestRuntime(parentLogger logger.Logger, configuration *runtime.Configura
 	return newTestRuntime, nil
 }
 
-func (r *testRuntime) RunWrapper(eventSocketPath []string, controlSocketPath string) (*os.Process, error) {
-	if len(eventSocketPath) > 1 {
+func (r *testRuntime) RunWrapper(eventSocketPaths []string, controlSocketPath string) (*os.Process, error) {
+	if len(eventSocketPaths) > 1 {
 		return nil, fmt.Errorf("test runtime doesn't support multiple socket processing yet")
 	}
 	var err error
@@ -79,8 +79,13 @@ func (r *testRuntime) RunWrapper(eventSocketPath []string, controlSocketPath str
 	}
 	r.wrapperProcess = cmd.Process
 
+	var eventSocketPath string
+	if len(eventSocketPath) == 1 {
+		eventSocketPath = eventSocketPaths[0]
+	}
+
 	// Connect to runtime
-	r.eventConn, err = net.Dial("unix", eventSocketPath[0])
+	r.eventConn, err = net.Dial("unix", eventSocketPath)
 	if err != nil {
 		return nil, err
 	}

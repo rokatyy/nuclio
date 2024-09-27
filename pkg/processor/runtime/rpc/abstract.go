@@ -34,26 +34,17 @@ import (
 	"github.com/nuclio/nuclio-sdk-go"
 )
 
-// TODO: Find a better place (both on file system and configuration)
-const (
-	socketPathTemplate = "/tmp/nuclio-rpc-%s.sock"
-	connectionTimeout  = 2 * time.Minute
-)
-
 // AbstractRuntime is a runtime that communicates via unix domain socket
 type AbstractRuntime struct {
 	runtime.AbstractRuntime
-	configuration     *runtime.Configuration
-	eventEncoder      EventEncoder
-	controlEncoder    EventEncoder
-	wrapperProcess    *os.Process
-	functionLogger    logger.Logger
-	runtime           Runtime
-	startChan         chan struct{}
-	stopChan          chan struct{}
-	cancelHandlerChan chan struct{}
-	socketType        SocketType
-	processWaiter     *processwaiter.ProcessWaiter
+	configuration  *runtime.Configuration
+	wrapperProcess *os.Process
+	functionLogger logger.Logger
+	runtime        Runtime
+	startChan      chan struct{}
+	stopChan       chan struct{}
+	socketType     SocketType
+	processWaiter  *processwaiter.ProcessWaiter
 
 	socketAllocator *SocketAllocator
 }
@@ -283,13 +274,12 @@ func (r *AbstractRuntime) signal(signal syscall.Signal) error {
 }
 
 func (r *AbstractRuntime) startWrapper() error {
-	err := r.socketAllocator.start()
-	if err != nil {
-		return errors.Wrap(err, "Failed to start socket allocator")
+	var err error
+	if err = r.socketAllocator.startListeners(); err != nil {
+		return errors.Wrap(err, "Failed to start sockets")
 	}
 
-	r.processWaiter, err = processwaiter.NewProcessWaiter()
-	if err != nil {
+	if r.processWaiter, err = processwaiter.NewProcessWaiter(); err != nil {
 		return errors.Wrap(err, "Failed to create process waiter")
 	}
 

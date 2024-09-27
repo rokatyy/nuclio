@@ -20,14 +20,15 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"github.com/nuclio/errors"
-	"github.com/nuclio/nuclio/pkg/common/status"
-	"time"
-
-	"github.com/nuclio/logger"
-	"github.com/nuclio/nuclio/pkg/common"
 	"io"
 	"net"
+	"time"
+
+	"github.com/nuclio/nuclio/pkg/common"
+	"github.com/nuclio/nuclio/pkg/common/status"
+
+	"github.com/nuclio/errors"
+	"github.com/nuclio/logger"
 )
 
 type result struct {
@@ -60,11 +61,10 @@ type socketConnection struct {
 type AbstractSocket struct {
 	*socketConnection
 	Logger     logger.Logger
-	outReader  *bufio.Reader
 	runtime    *AbstractRuntime
 	encoder    EventEncoder
 	cancelChan chan struct{}
-	status     status.Status
+	//status     status.Status
 }
 
 type ControlMessageSocket struct {
@@ -275,14 +275,6 @@ func (s *EventSocket) handleResponseLog(response []byte) {
 
 	vars := common.MapToSlice(logRecord.With)
 	logFunc(logRecord.Message, vars...)
-}
-
-// resolveFunctionLogger return either functionLogger if provided or root Logger if not
-func (s *EventSocket) resolveFunctionLogger(functionLogger logger.Logger) logger.Logger {
-	if s.runtime.functionLogger == nil {
-		return s.runtime.Logger
-	}
-	return s.runtime.functionLogger
 }
 
 func (s *EventSocket) handleStart() {

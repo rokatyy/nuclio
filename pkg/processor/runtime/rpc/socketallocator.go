@@ -18,13 +18,20 @@ package rpc
 
 import (
 	"fmt"
-	"github.com/nuclio/errors"
-	"github.com/nuclio/logger"
-	"github.com/nuclio/nuclio/pkg/common"
-	"github.com/rs/xid"
 	"net"
 	"os"
 	"time"
+
+	"github.com/nuclio/nuclio/pkg/common"
+
+	"github.com/nuclio/errors"
+	"github.com/nuclio/logger"
+	"github.com/rs/xid"
+)
+
+const (
+	socketPathTemplate = "/tmp/nuclio-rpc-%s.sock"
+	connectionTimeout  = 2 * time.Minute
 )
 
 type SocketAllocator struct {
