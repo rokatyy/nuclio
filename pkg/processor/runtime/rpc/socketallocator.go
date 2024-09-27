@@ -45,7 +45,7 @@ type SocketAllocator struct {
 }
 
 func NewSocketAllocator(logger logger.Logger) *SocketAllocator {
-	return &SocketAllocator{logger: logger, minSocketsNum: 1, maxSocketsNum: 1}
+	return &SocketAllocator{logger: logger, minSocketsNum: 1, maxSocketsNum: 1, eventSockets: make([]*EventSocket, 0)}
 }
 
 func (sa *SocketAllocator) startListeners() error {
