@@ -76,6 +76,7 @@ func NewControlMessageSocket(logger logger.Logger, socketConnection *socketConne
 		socketConnection: socketConnection,
 		Logger:           logger,
 		runtime:          runtime,
+		cancelChan:       make(chan struct{}, 1),
 	}
 	return &ControlMessageSocket{AbstractSocket: abstractSocket}
 }
