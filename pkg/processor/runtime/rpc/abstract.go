@@ -41,7 +41,6 @@ type AbstractRuntime struct {
 	wrapperProcess *os.Process
 	functionLogger logger.Logger
 	runtime        Runtime
-	startChan      chan struct{}
 	stopChan       chan struct{}
 	socketType     SocketType
 	processWaiter  *processwaiter.ProcessWaiter
