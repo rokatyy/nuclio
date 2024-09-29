@@ -132,7 +132,7 @@ func (r *AbstractRuntime) ProcessBatch(batch []nuclio.Event, functionLogger logg
 	return responsesWithErrors, nil
 }
 
-// Stop stops the runtime
+// Stop stops the abstractRuntime
 func (r *AbstractRuntime) Stop() error {
 	r.Logger.WarnWith("Stopping",
 		"status", r.GetStatus(),

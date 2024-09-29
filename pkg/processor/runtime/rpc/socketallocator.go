@@ -35,8 +35,8 @@ const (
 )
 
 type SocketAllocator struct {
-	runtime *AbstractRuntime
-	logger  logger.Logger
+	abstractRuntime *AbstractRuntime
+	logger          logger.Logger
 
 	minSocketsNum        int
 	maxSocketsNum        int
@@ -45,11 +45,11 @@ type SocketAllocator struct {
 }
 
 func NewSocketAllocator(logger logger.Logger, runtime *AbstractRuntime) *SocketAllocator {
-	return &SocketAllocator{logger: logger, minSocketsNum: 1, maxSocketsNum: 1, eventSockets: make([]*EventSocket, 0), runtime: runtime}
+	return &SocketAllocator{logger: logger, minSocketsNum: 1, maxSocketsNum: 1, eventSockets: make([]*EventSocket, 0), abstractRuntime: runtime}
 }
 
 func (sa *SocketAllocator) startListeners() error {
-	if sa.runtime.SupportsControlCommunication() {
+	if sa.abstractRuntime.runtime.SupportsControlCommunication() {
 		controlConnection, err := sa.createSocketConnection()
 		if err != nil {
 			return errors.Wrap(err, "Failed to create socket connection")
@@ -57,7 +57,7 @@ func (sa *SocketAllocator) startListeners() error {
 		sa.controlMessageSocket = NewControlMessageSocket(
 			sa.logger.GetChild("ControlMessageSocket"),
 			controlConnection,
-			sa.runtime)
+			sa.abstractRuntime)
 	}
 
 	for i := 0; i < sa.minSocketsNum; i++ {
@@ -67,7 +67,7 @@ func (sa *SocketAllocator) startListeners() error {
 		}
 		sa.eventSockets = append(sa.eventSockets, NewEventSocket(sa.logger.GetChild("EventSocket"),
 			eventConnection,
-			sa.runtime))
+			sa.abstractRuntime))
 	}
 	return nil
 }
@@ -78,36 +78,36 @@ func (sa *SocketAllocator) start() error {
 		if socket.conn, err = socket.listener.Accept(); err != nil {
 			return errors.Wrap(err, "Can't get connection from wrapper")
 		}
-		socket.encoder = sa.runtime.runtime.GetEventEncoder(socket.conn)
+		socket.encoder = sa.abstractRuntime.runtime.GetEventEncoder(socket.conn)
 		socket.resultChan = make(chan *batchedResults)
 		socket.cancelChan = make(chan struct{})
 		go socket.runHandler()
 	}
 	sa.logger.Debug("Events sockets established connection")
 
-	if sa.runtime.SupportsControlCommunication() {
+	if sa.abstractRuntime.runtime.SupportsControlCommunication() {
 		sa.logger.DebugWith("Creating control connection",
-			"wid", sa.runtime.Context.WorkerID)
+			"wid", sa.abstractRuntime.Context.WorkerID)
 		sa.controlMessageSocket.conn, err = sa.controlMessageSocket.listener.Accept()
 		if err != nil {
 			return errors.Wrap(err, "Can't get control connection from wrapper")
 		}
-		sa.controlMessageSocket.encoder = sa.runtime.runtime.GetEventEncoder(sa.controlMessageSocket.conn)
+		sa.controlMessageSocket.encoder = sa.abstractRuntime.runtime.GetEventEncoder(sa.controlMessageSocket.conn)
 
 		// initialize control message broker
-		sa.runtime.ControlMessageBroker = NewRpcControlMessageBroker(
+		sa.abstractRuntime.ControlMessageBroker = NewRpcControlMessageBroker(
 			sa.controlMessageSocket.encoder,
 			sa.logger,
-			sa.runtime.configuration.ControlMessageBroker)
+			sa.abstractRuntime.configuration.ControlMessageBroker)
 
 		go sa.controlMessageSocket.runHandler()
 
 		sa.logger.DebugWith("Control connection created",
-			"wid", sa.runtime.Context.WorkerID)
+			"wid", sa.abstractRuntime.Context.WorkerID)
 	}
 
 	// wait for start if required to
-	if sa.runtime.WaitForStart() {
+	if sa.abstractRuntime.runtime.WaitForStart() {
 		sa.logger.Debug("Waiting for start")
 		for _, socket := range sa.eventSockets {
 			<-socket.startChan
@@ -145,7 +145,7 @@ func (sa *SocketAllocator) getSocketAddresses() ([]string, string) {
 func (sa *SocketAllocator) createSocketConnection() (*socketConnection, error) {
 	connection := &socketConnection{}
 	var err error
-	if sa.runtime.GetSocketType() == UnixSocket {
+	if sa.abstractRuntime.runtime.GetSocketType() == UnixSocket {
 		connection.listener, connection.address, err = sa.createUnixListener()
 	} else {
 		connection.listener, connection.address, err = sa.createTCPListener()

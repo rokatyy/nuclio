@@ -345,6 +345,7 @@ class Wrapper(object):
 
         for _ in range(timeout):
             try:
+                self._logger.debug(f"Connecting to socket {socket_path}")
                 sock.connect(socket_path)
                 return sock
 
