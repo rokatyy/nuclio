@@ -71,7 +71,6 @@ func NewAbstractRuntime(logger logger.Logger,
 		AbstractRuntime: *abstractRuntime,
 		configuration:   configuration,
 		runtime:         runtimeInstance,
-		startChan:       make(chan struct{}, 1),
 		stopChan:        make(chan struct{}, 1),
 		socketType:      UnixSocket,
 	}

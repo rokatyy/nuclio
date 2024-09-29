@@ -153,7 +153,7 @@ type EventSocket struct {
 func NewEventSocket(logger logger.Logger, socketConnection *socketConnection, runtime *AbstractRuntime) *EventSocket {
 
 	abstractSocket := &AbstractSocket{socketConnection: socketConnection, Logger: logger, runtime: runtime}
-	return &EventSocket{AbstractSocket: abstractSocket}
+	return &EventSocket{AbstractSocket: abstractSocket, resultChan: make(chan *batchedResults), startChan: make(chan struct{}, 1)}
 }
 
 func (s *EventSocket) processEvent(item interface{}) (*batchedResults, error) {
