@@ -13,7 +13,6 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 
-
 public class Handler implements EventHandler {
 
     private static final String EVENTS_LOG_FILE_PATH = "/tmp/events.json";
@@ -79,8 +78,22 @@ public class Handler implements EventHandler {
     }
 
     private void appendToLogFile(String record) throws IOException {
-        try (FileWriter fileWriter = new FileWriter(EVENTS_LOG_FILE_PATH, true)) {
-            fileWriter.write(record + ", ");
+        File logFile = new File(EVENTS_LOG_FILE_PATH);
+
+        // Read existing content, if any
+        String existingData = logFile.exists() ? Files.readString(logFile.toPath()).trim() : "[]";
+
+        // Parse existing data and append the new record
+        String updatedData;
+        if (existingData.equals("[]")) {
+            updatedData = "[" + record + "]";
+        } else {
+            updatedData = existingData.substring(0, existingData.length() - 1) + "," + record + "]";
+        }
+
+        // Write the updated data back to the file
+        try (FileWriter fileWriter = new FileWriter(logFile, false)) {
+            fileWriter.write(updatedData);
         }
     }
 
@@ -91,9 +104,6 @@ public class Handler implements EventHandler {
         }
 
         String data = Files.readString(logFile.toPath()).trim();
-        if (data.length() > 2) {
-            return "[" + data.substring(0, data.length() - 2) + "]";
-        }
-        return "[]";
+        return data.isEmpty() ? "[]" : data;
     }
 }
