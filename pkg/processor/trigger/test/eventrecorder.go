@@ -120,6 +120,9 @@ func InvokeEventRecorder(suite *processorsuite.TestSuite,
 		// compare bodies
 		suite.Require().Equal(sentBodies, receivedBodies)
 
+		// before deleting function, give nuclio processor time to finish processing
+		time.Sleep(30 * time.Second)
+
 		return true
 	})
 }
