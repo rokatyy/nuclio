@@ -14,17 +14,9 @@
 #
 name: Periodic
 
-
 on:
-  pull_request:
-    branches:
-      - development
-      - "[0-9]+.[0-9]+.x"
-    paths-ignore:
-      - 'docs/**'
-      - '.github/styles/**'
-      - 'README.md'
-      - 'README_zh.md'
+  schedule:
+  - cron:  '0 */12 * * *'
 
 env:
   DOCKER_BUILDKIT: 1
@@ -39,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        command: [fast-tests]
+        command: [nuctl-tests,dotnet-tests,golang-tests,java-tests,python-tests,python-runtime-tests,fast-tests]
 
     # let's not run this on every fork, comment this out when developing periodic on your fork
     if: github.repository == 'nuclio/nuclio'

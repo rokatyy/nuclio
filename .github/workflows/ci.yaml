@@ -43,6 +43,59 @@ env:
   GITHUB_ACTIONS_BOT_EMAIL: github-actions[bot]@users.noreply.github.com
 
 jobs:
+  periodic:
+    name: Periodic Regression
+    # TODO: update this to ubuntu-latest when the runner issue is fixed:
+    # https://github.com/actions/runner-images/discussions/7188
+    runs-on: ubuntu-20.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        command: [fast-tests]
+
+    # let's not run this on every fork, comment this out when developing periodic on your fork
+    if: github.repository == 'nuclio/nuclio'
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Freeing up disk space
+        run: "${GITHUB_WORKSPACE}/hack/scripts/ci/free-space.sh"
+
+      - uses: actions/setup-go@v3
+        with:
+          cache: true
+          go-version-file: go.mod
+
+      - name: Build
+        run: make build
+        env:
+          NUCLIO_NUCTL_CREATE_SYMLINK: false
+
+      - name: Test
+        run: LIST_TESTS_MAKE_COMMAND=${{ matrix.command }} make test
+        env:
+          NUCLIO_CI_SKIP_STRESS_TEST: true
+
+      - name: System stats on failure
+        if: ${{ failure() }}
+        run: "${GITHUB_WORKSPACE}/hack/scripts/ci/system-stats.sh"
+
+      - name: Report Status
+        if: always()
+        uses: ravsamhq/notify-slack-action@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          status: ${{ job.status }}
+          notify_when: "failure"
+          notification_title: "{workflow} has failed"
+          message_format: "{emoji} *{workflow}* {status_message} in <{repo_url}|{repo}>"
+          footer: "<{repo_url}|{repo}> | <{run_url}|View Run>"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
