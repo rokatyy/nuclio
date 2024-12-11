@@ -200,7 +200,8 @@ func (suite *testSuite) TestReceiveRecords() {
 				createFunctionOptions,
 				map[string]triggertest.TopicMessages{
 					suite.topic: {
-						NumMessages: int(suite.NumPartitions),
+						NumMessages:         int(suite.NumPartitions),
+						CustomMessagePrefix: testCase.runtime,
 					},
 				},
 				nil,

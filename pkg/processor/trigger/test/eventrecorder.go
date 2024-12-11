@@ -41,13 +41,14 @@ type Event struct {
 type MessagePublisher func(string, string) error
 
 type TopicMessages struct {
-	NumMessages int
+	NumMessages         int
+	CustomMessagePrefix string
 }
 
 func InvokeEventRecorder(suite *processorsuite.TestSuite,
 	host string,
 	createFunctionOptions *platform.CreateFunctionOptions,
-	numExpectedMessagesPerTopic map[string]TopicMessages,
+	expectedMessagesPerTopic map[string]TopicMessages,
 	numNonExpectedMessagesPerTopic map[string]TopicMessages,
 	messagePublisher MessagePublisher) {
 
@@ -57,13 +58,18 @@ func InvokeEventRecorder(suite *processorsuite.TestSuite,
 		var sentBodies []string
 
 		suite.Logger.DebugWith("Producing",
-			"numExpectedMessagesPerTopic", numExpectedMessagesPerTopic,
+			"expectedMessagesPerTopic", expectedMessagesPerTopic,
 			"numNonExpectedMessagesPerTopic", numNonExpectedMessagesPerTopic)
 
 		// send messages we expect to see arrive @ the function, each to their own topic
-		for topic, topicMessages := range numExpectedMessagesPerTopic {
+		for topic, topicMessages := range expectedMessagesPerTopic {
 			for messageIdx := 0; messageIdx < topicMessages.NumMessages; messageIdx++ {
-				messageBody := fmt.Sprintf("%s-%d", topic, messageIdx)
+				var messageBody string
+				if topicMessages.CustomMessagePrefix != "" {
+					messageBody = fmt.Sprintf("%s-%s-%d", topicMessages.CustomMessagePrefix, topic, messageIdx)
+				} else {
+					messageBody = fmt.Sprintf("%s-%d", topic, messageIdx)
+				}
 
 				// send the message
 				err := messagePublisher(topic, messageBody)
