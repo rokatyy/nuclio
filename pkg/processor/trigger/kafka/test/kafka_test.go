@@ -19,6 +19,7 @@ limitations under the License.
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -63,6 +64,8 @@ type testSuite struct {
 
 	// for cleanup
 	zooKeeperContainerID string
+
+	ctx context.Context
 }
 
 func (suite *testSuite) SetupSuite() {
@@ -72,6 +75,8 @@ func (suite *testSuite) SetupSuite() {
 	suite.httpClient = &http.Client{
 		Timeout: 10 * time.Second,
 	}
+
+	suite.ctx = context.Background()
 
 	// messaging
 	suite.topic = "myTopic"
@@ -206,6 +211,15 @@ func (suite *testSuite) TestReceiveRecords() {
 				},
 				nil,
 				suite.publishMessageToTopic)
+			functions, _ := suite.Platform.GetFunctions(suite.ctx, &platform.GetFunctionsOptions{Name: functionName, Namespace: createFunctionOptions.FunctionConfig.Meta.Namespace})
+			// we need to ensure that function was removed successfully
+			// otherwise, try to remove it again.
+			if len(functions) > 0 {
+				err := suite.Platform.DeleteFunction(suite.ctx, &platform.DeleteFunctionOptions{FunctionConfig: createFunctionOptions.FunctionConfig})
+				suite.Logger.WarnWith("Failed to delete function",
+					"functionName", functionName,
+					"error", err)
+			}
 		})
 	}
 }
