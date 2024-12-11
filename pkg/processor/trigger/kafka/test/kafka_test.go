@@ -108,10 +108,11 @@ func (suite *testSuite) SetupSuite() {
 	// change partitioner , so we can specify which partition to send on
 	brokerConfig.Producer.Partitioner = sarama.NewManualPartitioner
 
+	time.Sleep(7 * time.Second)
 	// connect to the broker
 	err = suite.broker.Open(brokerConfig)
 	suite.Require().NoError(err, "Failed to open broker")
-
+	time.Sleep(10 * time.Second)
 	// create topic
 	createTopicsResponse, err := suite.broker.CreateTopics(&sarama.CreateTopicsRequest{
 		TopicDetails: map[string]*sarama.TopicDetail{
@@ -147,6 +148,7 @@ func (suite *testSuite) TestReceiveRecords() {
 		functionPath string
 		runtime      string
 		dependencies []string
+		handler      string
 	}{
 		{
 			name:         "python-runtime",
@@ -163,12 +165,16 @@ func (suite *testSuite) TestReceiveRecords() {
 			functionPath: suite.FunctionPaths["java"],
 			runtime:      "java",
 			dependencies: []string{"group: org.json, name: json, version: 20210307"},
+			handler:      "Handler",
 		},
 	} {
 		suite.Run(testCase.name, func() {
 			functionName := "event_recorder"
 			createFunctionOptions := suite.GetDeployOptions(functionName, testCase.functionPath)
 			createFunctionOptions.FunctionConfig.Spec.Runtime = testCase.runtime
+			if testCase.handler != "" {
+				createFunctionOptions.FunctionConfig.Spec.Handler = "Handler"
+			}
 			createFunctionOptions.FunctionConfig.Spec.Build.Dependencies = testCase.dependencies
 			createFunctionOptions.FunctionConfig.Spec.Platform = functionconfig.Platform{
 				Attributes: map[string]interface{}{
