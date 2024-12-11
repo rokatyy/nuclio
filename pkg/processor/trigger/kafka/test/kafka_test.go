@@ -146,6 +146,7 @@ func (suite *testSuite) TestReceiveRecords() {
 		name         string
 		functionPath string
 		runtime      string
+		dependencies []string
 	}{
 		{
 			name:         "python-runtime",
@@ -157,11 +158,18 @@ func (suite *testSuite) TestReceiveRecords() {
 			functionPath: suite.FunctionPaths["golang"],
 			runtime:      "golang",
 		},
+		{
+			name:         "java-runtime",
+			functionPath: suite.FunctionPaths["java"],
+			runtime:      "java",
+			dependencies: []string{"group: org.json, name: json, version: 20210307"},
+		},
 	} {
 		suite.Run(testCase.name, func() {
 			functionName := "event_recorder"
 			createFunctionOptions := suite.GetDeployOptions(functionName, testCase.functionPath)
 			createFunctionOptions.FunctionConfig.Spec.Runtime = testCase.runtime
+			createFunctionOptions.FunctionConfig.Spec.Build.Dependencies = testCase.dependencies
 			createFunctionOptions.FunctionConfig.Spec.Platform = functionconfig.Platform{
 				Attributes: map[string]interface{}{
 					"network": suite.BrokerContainerNetworkName,
