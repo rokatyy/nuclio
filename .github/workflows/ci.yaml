@@ -54,9 +54,6 @@ jobs:
       matrix:
         command: [fast-tests]
 
-    # let's not run this on every fork, comment this out when developing periodic on your fork
-    if: github.repository == 'nuclio/nuclio'
-
     steps:
       - uses: actions/checkout@v3
 
