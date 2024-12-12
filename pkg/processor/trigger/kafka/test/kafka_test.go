@@ -113,11 +113,9 @@ func (suite *testSuite) SetupSuite() {
 	// change partitioner , so we can specify which partition to send on
 	brokerConfig.Producer.Partitioner = sarama.NewManualPartitioner
 
-	time.Sleep(7 * time.Second)
 	// connect to the broker
 	err = suite.broker.Open(brokerConfig)
 	suite.Require().NoError(err, "Failed to open broker")
-	time.Sleep(10 * time.Second)
 	// create topic
 	createTopicsResponse, err := suite.broker.CreateTopics(&sarama.CreateTopicsRequest{
 		TopicDetails: map[string]*sarama.TopicDetail{
@@ -148,6 +146,7 @@ func (suite *testSuite) TearDownSuite() {
 }
 
 func (suite *testSuite) TestReceiveRecords() {
+	numberOfCommittedMessages := 0
 	for _, testCase := range []struct {
 		name         string
 		functionPath string
@@ -200,6 +199,8 @@ func (suite *testSuite) TestReceiveRecords() {
 				},
 			}
 
+			numberOfCommittedMessages += int(suite.NumPartitions)
+
 			triggertest.InvokeEventRecorder(&suite.AbstractBrokerSuite.TestSuite,
 				suite.BrokerHost,
 				createFunctionOptions,
@@ -210,16 +211,12 @@ func (suite *testSuite) TestReceiveRecords() {
 					},
 				},
 				nil,
-				suite.publishMessageToTopic)
-			functions, _ := suite.Platform.GetFunctions(suite.ctx, &platform.GetFunctionsOptions{Name: functionName, Namespace: createFunctionOptions.FunctionConfig.Meta.Namespace})
-			// we need to ensure that function was removed successfully
-			// otherwise, try to remove it again.
-			if len(functions) > 0 {
-				err := suite.Platform.DeleteFunction(suite.ctx, &platform.DeleteFunctionOptions{FunctionConfig: createFunctionOptions.FunctionConfig})
-				suite.Logger.WarnWith("Failed to delete function",
-					"functionName", functionName,
-					"error", err)
-			}
+				suite.publishMessageToTopic,
+				&triggertest.PostPublishChecks{
+					EnsureAckFunction:                suite.ensureNumberOfCommittedOffsets,
+					ExpectedNumberOfCommittedOffsets: numberOfCommittedMessages,
+					ConsumerGroup:                    functionName,
+				})
 		})
 	}
 }
@@ -744,6 +741,52 @@ func (suite *testSuite) resolveReceivedEventBodies(deployResult *platform.Create
 	}
 
 	return receivedBodies
+}
+
+func (suite *testSuite) ensureNumberOfCommittedOffsets(consumerGroup string, topic string, expectedNumberOfCommittedOffsets int) bool {
+	if topic == "" {
+		topic = suite.topic
+	}
+	numberOfCommittedOffsets, err := suite.getNumberOfCommittedOffsets(consumerGroup, topic, int(suite.NumPartitions))
+	if err != nil {
+		return false
+	}
+	return int(numberOfCommittedOffsets) == expectedNumberOfCommittedOffsets
+}
+
+func (suite *testSuite) getNumberOfCommittedOffsets(consumerGroup, topic string, partitions int) (int64, error) {
+	// Create an OffsetFetchRequest
+	request := &sarama.OffsetFetchRequest{
+		ConsumerGroup: consumerGroup,
+		Version:       1,
+	}
+
+	for partition := 0; partition < partitions; partition++ {
+		request.AddPartition(topic, int32(partition))
+	}
+
+	// Send the request to the broker
+	response, err := suite.broker.FetchOffset(request)
+	if err != nil {
+		return -1, fmt.Errorf("failed to fetch offsets: %w", err)
+	}
+
+	// Sum committed offsets across all partitions
+	var totalOffset int64 = 0
+	for partition := 0; partition < partitions; partition++ {
+		block := response.GetBlock(topic, int32(partition))
+		if block == nil {
+			return -1, fmt.Errorf("no offset block returned for topic %s partition %d", topic, partition)
+		}
+		if block.Err != sarama.ErrNoError {
+			return -1, fmt.Errorf("error in offset block for partition %d: %v", partition, block.Err)
+		}
+		if block.Offset != -1 {
+			totalOffset += block.Offset
+		}
+	}
+
+	return totalOffset, nil
 }
 
 func (suite *testSuite) getLastCommitOffset(port int) int {

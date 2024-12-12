@@ -45,12 +45,20 @@ type TopicMessages struct {
 	CustomMessagePrefix string
 }
 
-func InvokeEventRecorder(suite *processorsuite.TestSuite,
+type PostPublishChecks struct {
+	EnsureAckFunction                func(consumerGroup string, topic string, expectedNumberOfCommittedOffsets int) bool
+	ExpectedNumberOfCommittedOffsets int
+	ConsumerGroup                    string
+}
+
+func InvokeEventRecorder(
+	suite *processorsuite.TestSuite,
 	host string,
 	createFunctionOptions *platform.CreateFunctionOptions,
 	expectedMessagesPerTopic map[string]TopicMessages,
 	numNonExpectedMessagesPerTopic map[string]TopicMessages,
-	messagePublisher MessagePublisher) {
+	messagePublisher MessagePublisher,
+	postPublishChecks *PostPublishChecks) {
 
 	// deploy functions
 	suite.DeployFunction(createFunctionOptions, func(deployResult *platform.CreateFunctionResult) bool {
@@ -120,9 +128,18 @@ func InvokeEventRecorder(suite *processorsuite.TestSuite,
 		// compare bodies
 		suite.Require().Equal(sentBodies, receivedBodies)
 
-		// before deleting function, give nuclio processor time to finish processing
-		time.Sleep(30 * time.Second)
-
+		if postPublishChecks != nil {
+			if postPublishChecks.EnsureAckFunction != nil {
+				err = common.RetryUntilSuccessful(
+					60*time.Second,
+					2*time.Second,
+					func() bool {
+						return postPublishChecks.EnsureAckFunction(postPublishChecks.ConsumerGroup, "", postPublishChecks.ExpectedNumberOfCommittedOffsets)
+					},
+				)
+				suite.Require().NoError(err)
+			}
+		}
 		return true
 	})
 }
