@@ -76,8 +76,6 @@ func (suite *testSuite) SetupSuite() {
 		Timeout: 10 * time.Second,
 	}
 
-	suite.ctx = context.Background()
-
 	// messaging
 	suite.topic = "myTopic"
 	suite.consumerGroup = "myConsumerGroup"
@@ -186,18 +184,18 @@ func (suite *testSuite) TestReceiveRecords() {
 				},
 			}
 
-			createFunctionOptions.FunctionConfig.Spec.Triggers = map[string]functionconfig.Trigger{
-				"my-kafka": {
-					Kind: "kafka-cluster",
-					URL:  fmt.Sprintf("%s:9090", suite.brokerContainerName),
-					Attributes: map[string]interface{}{
-						"topics":        []string{suite.topic},
-						"consumerGroup": functionName,
-						"initialOffset": suite.initialOffset,
-					},
-					WorkerTerminationTimeout: "5s",
-				},
-			}
+	createFunctionOptions.FunctionConfig.Spec.Triggers = map[string]functionconfig.Trigger{
+		"my-kafka": {
+			Kind: "kafka-cluster",
+			URL:  fmt.Sprintf("%s:9090", suite.brokerContainerName),
+			Attributes: map[string]interface{}{
+				"topics":        []string{suite.topic},
+				"consumerGroup": functionName,
+				"initialOffset": suite.initialOffset,
+			},
+			WorkerTerminationTimeout: "5s",
+		},
+	}
 
 			numberOfCommittedMessages += int(suite.NumPartitions)
 
