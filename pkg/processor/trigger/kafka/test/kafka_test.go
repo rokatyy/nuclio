@@ -19,6 +19,7 @@ limitations under the License.
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -63,6 +64,8 @@ type testSuite struct {
 
 	// for cleanup
 	zooKeeperContainerID string
+
+	ctx context.Context
 }
 
 func (suite *testSuite) SetupSuite() {
@@ -111,7 +114,6 @@ func (suite *testSuite) SetupSuite() {
 	// connect to the broker
 	err = suite.broker.Open(brokerConfig)
 	suite.Require().NoError(err, "Failed to open broker")
-
 	// create topic
 	createTopicsResponse, err := suite.broker.CreateTopics(&sarama.CreateTopicsRequest{
 		TopicDetails: map[string]*sarama.TopicDetail{
@@ -142,10 +144,13 @@ func (suite *testSuite) TearDownSuite() {
 }
 
 func (suite *testSuite) TestReceiveRecords() {
+	numberOfCommittedMessages := 0
 	for _, testCase := range []struct {
 		name         string
 		functionPath string
 		runtime      string
+		dependencies []string
+		handler      string
 	}{
 		{
 			name:         "python-runtime",
@@ -157,40 +162,59 @@ func (suite *testSuite) TestReceiveRecords() {
 			functionPath: suite.FunctionPaths["golang"],
 			runtime:      "golang",
 		},
+		{
+			name:         "java-runtime",
+			functionPath: suite.FunctionPaths["java"],
+			runtime:      "java",
+			dependencies: []string{"group: org.json, name: json, version: 20210307"},
+			handler:      "Handler",
+		},
 	} {
 		suite.Run(testCase.name, func() {
 			functionName := "event_recorder"
 			createFunctionOptions := suite.GetDeployOptions(functionName, testCase.functionPath)
 			createFunctionOptions.FunctionConfig.Spec.Runtime = testCase.runtime
+			if testCase.handler != "" {
+				createFunctionOptions.FunctionConfig.Spec.Handler = "Handler"
+			}
+			createFunctionOptions.FunctionConfig.Spec.Build.Dependencies = testCase.dependencies
 			createFunctionOptions.FunctionConfig.Spec.Platform = functionconfig.Platform{
 				Attributes: map[string]interface{}{
 					"network": suite.BrokerContainerNetworkName,
 				},
 			}
 
-			createFunctionOptions.FunctionConfig.Spec.Triggers = map[string]functionconfig.Trigger{
-				"my-kafka": {
-					Kind: "kafka-cluster",
-					URL:  fmt.Sprintf("%s:9090", suite.brokerContainerName),
-					Attributes: map[string]interface{}{
-						"topics":        []string{suite.topic},
-						"consumerGroup": functionName,
-						"initialOffset": suite.initialOffset,
-					},
-					WorkerTerminationTimeout: "5s",
-				},
-			}
+	createFunctionOptions.FunctionConfig.Spec.Triggers = map[string]functionconfig.Trigger{
+		"my-kafka": {
+			Kind: "kafka-cluster",
+			URL:  fmt.Sprintf("%s:9090", suite.brokerContainerName),
+			Attributes: map[string]interface{}{
+				"topics":        []string{suite.topic},
+				"consumerGroup": functionName,
+				"initialOffset": suite.initialOffset,
+			},
+			WorkerTerminationTimeout: "5s",
+		},
+	}
+
+			numberOfCommittedMessages += int(suite.NumPartitions)
 
 			triggertest.InvokeEventRecorder(&suite.AbstractBrokerSuite.TestSuite,
 				suite.BrokerHost,
 				createFunctionOptions,
 				map[string]triggertest.TopicMessages{
 					suite.topic: {
-						NumMessages: int(suite.NumPartitions),
+						NumMessages:         int(suite.NumPartitions),
+						CustomMessagePrefix: testCase.runtime,
 					},
 				},
 				nil,
-				suite.publishMessageToTopic)
+				suite.publishMessageToTopic,
+				&triggertest.PostPublishChecks{
+					EnsureAckFunction:                suite.ensureNumberOfCommittedOffsets,
+					ExpectedNumberOfCommittedOffsets: numberOfCommittedMessages,
+					ConsumerGroup:                    functionName,
+				})
 		})
 	}
 }
@@ -715,6 +739,52 @@ func (suite *testSuite) resolveReceivedEventBodies(deployResult *platform.Create
 	}
 
 	return receivedBodies
+}
+
+func (suite *testSuite) ensureNumberOfCommittedOffsets(consumerGroup string, topic string, expectedNumberOfCommittedOffsets int) bool {
+	if topic == "" {
+		topic = suite.topic
+	}
+	numberOfCommittedOffsets, err := suite.getNumberOfCommittedOffsets(consumerGroup, topic, int(suite.NumPartitions))
+	if err != nil {
+		return false
+	}
+	return int(numberOfCommittedOffsets) == expectedNumberOfCommittedOffsets
+}
+
+func (suite *testSuite) getNumberOfCommittedOffsets(consumerGroup, topic string, partitions int) (int64, error) {
+	// Create an OffsetFetchRequest
+	request := &sarama.OffsetFetchRequest{
+		ConsumerGroup: consumerGroup,
+		Version:       1,
+	}
+
+	for partition := 0; partition < partitions; partition++ {
+		request.AddPartition(topic, int32(partition))
+	}
+
+	// Send the request to the broker
+	response, err := suite.broker.FetchOffset(request)
+	if err != nil {
+		return -1, fmt.Errorf("failed to fetch offsets: %w", err)
+	}
+
+	// Sum committed offsets across all partitions
+	var totalOffset int64 = 0
+	for partition := 0; partition < partitions; partition++ {
+		block := response.GetBlock(topic, int32(partition))
+		if block == nil {
+			return -1, fmt.Errorf("no offset block returned for topic %s partition %d", topic, partition)
+		}
+		if block.Err != sarama.ErrNoError {
+			return -1, fmt.Errorf("error in offset block for partition %d: %v", partition, block.Err)
+		}
+		if block.Offset != -1 {
+			totalOffset += block.Offset
+		}
+	}
+
+	return totalOffset, nil
 }
 
 func (suite *testSuite) getLastCommitOffset(port int) int {
