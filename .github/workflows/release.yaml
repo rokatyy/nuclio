@@ -111,6 +111,9 @@ jobs:
       - name: Changelog
         uses: scottbrenner/generate-changelog-action@master
         id: Changelog
+        with:
+          from-tag: ${{ needs.prepare-inputs.outputs.prev_version }}
+          to-tag: ${{ needs.prepare-inputs.outputs.version }}
       - name: Create Release
         id: create_release
         uses: actions/create-release@latest
