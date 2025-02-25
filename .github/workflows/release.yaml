@@ -26,6 +26,7 @@ env:
 permissions:
   contents: write
   packages: write
+  pull-requests: write
 
 on:
   workflow_dispatch:
@@ -98,35 +99,29 @@ jobs:
           echo "version=${TARGET_VERSION_INPUT}" >> $GITHUB_OUTPUT
           echo "helm_version=${HELM_VERSION_INPUT}" >> $GITHUB_OUTPUT
 
-  create-release:
-    name: Update release notes and create release
+  release:
+    name: Create Release
     runs-on: ubuntu-latest
-    if: github.event.inputs.skip_create_tag_release != 'true'
-    needs: [ prepare-inputs ]
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Set up GitHub CLI
-        run: |
-          curl -fsSL https://cli.github.com/install.sh | sh
-          gh --version
-
-      - name: Generate Structured Release Notes
-        run: |
-          LATEST_TAG=${{ needs.prepare-inputs.outputs.prev_version }}
-          RELEASE_NOTES=$(git log $LATEST_TAG..${GITHUB_SHA} --pretty=format:'- [%h] %s by @%aN in #%d' --abbrev-commit | sed 's/(.*)//')
-          echo "$RELEASE_NOTES" > release_notes.md
-
+      - name: Changelog
+        uses: scottbrenner/generate-changelog-action@master
+        id: Changelog
       - name: Create Release
-        run: |
-          gh release create v${{ needs.prepare-inputs.outputs.version }} \
-            --title "Release v${{ needs.prepare-inputs.outputs.version }}" \
-            --notes-file release_notes.md
+        id: create_release
+        uses: actions/create-release@latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+        with:
+          tag_name: ${{ needs.prepare-inputs.outputs.version }}
+          release_name: ${{ needs.prepare-inputs.outputs.version }}
+          body: |
+            ${{ steps.Changelog.outputs.changelog }}
+          draft: false
+          prerelease: false
 
   helm-bump-create-pr:
     runs-on: ubuntu-latest
