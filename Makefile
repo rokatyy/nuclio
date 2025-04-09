@@ -104,7 +104,7 @@ else ifeq ($(NUCLIO_ARCH), arm64)
 else
 	NUCLIO_DOCKER_ALPINE_IMAGE 		?= gcr.io/iguazio/alpine:3.20
 	NUCLIO_BASE_IMAGE_NAME 			?= gcr.io/iguazio/golang
-	NUCLIO_DOCKER_JAVA_OPENJDK		?= gcr.io/iguazio/openjdk:11-slim-buster
+	NUCLIO_DOCKER_JAVA_OPENJDK		?= openjdk:17-jdk-slim-buster
 	NODE_IMAGE_NAME 				?= gcr.io/iguazio/node:14.21
 endif
 
