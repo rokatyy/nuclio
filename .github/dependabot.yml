@@ -20,7 +20,8 @@ updates:
     directory: "/"
     schedule:
       # Check for updates to GitHub Actions every week
-      interval: "weekly"
+      interval: "daily"
+      time: "16:40"
     commit-message:
       prefix: "[Dependabot] "
     open-pull-requests-limit: 6
