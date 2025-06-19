@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/nuclio/errors"
 	"github.com/nuclio/logger"
@@ -220,5 +221,44 @@ func NewResultFromData(logger logger.Logger, data []byte) Result {
 		return newStreamStartFromSingleResult(singleResult)
 	default:
 		return nil
+	}
+}
+
+func NewResultWithNuclioProcessingResult(object interface{}) ResultWithNuclioProcessingResult {
+	if object == nil {
+		return NewSingleResult(nil)
+	}
+	switch typedResponse := object.(type) {
+	case ResultWithNuclioProcessingResult:
+		return typedResponse
+	case *nuclio.ResponseStream:
+		return NewStreamStart(typedResponse)
+	case nuclio.ResponseStream:
+		return NewStreamStart(&typedResponse)
+	case *nuclio.Response:
+		return NewSingleResult(typedResponse)
+	case nuclio.Response:
+		return NewSingleResult(&typedResponse)
+	case io.ReadCloser:
+		// if the response is an io.ReadCloser, create a response stream
+		return NewStreamStart(
+			nuclio.NewCustomResponseStream(
+				"", nil, 0, typedResponse, nil),
+		)
+	case []byte:
+		return NewSingleResult(&nuclio.Response{
+			Body: typedResponse,
+		})
+	case string:
+		return NewSingleResult(&nuclio.Response{
+			Body: []byte(typedResponse),
+		})
+	default:
+		// try to JSON-marshal the value
+		if marshaled, marshalErr := json.Marshal(typedResponse); marshalErr == nil {
+			return NewSingleResult(&nuclio.Response{Body: marshaled})
+		}
+		// fallback to string formatting if JSON marshalling fails
+		return NewSingleResult(&nuclio.Response{Body: []byte(fmt.Sprintf("%v", typedResponse))})
 	}
 }

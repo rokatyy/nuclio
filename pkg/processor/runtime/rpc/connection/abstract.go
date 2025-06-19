@@ -401,9 +401,8 @@ func (be *AbstractEventConnection) ProcessEventBatch(batch []nuclio.Event, funct
 }
 
 func (be *AbstractEventConnection) ProcessStream(stream *result.StreamStart) error {
-
 	// always close stream when processing is done
-	defer stream.ResponseStream.StopStreaming()
+	defer be.postProcessStreaming(stream.ResponseStream)
 
 	// start with writing a first chunk
 	// this is blocking operation, so it will wait until the reader is ready to receive data
@@ -656,8 +655,9 @@ func (be *AbstractEventConnection) processItem(item interface{}, functionLogger 
 }
 
 func (be *AbstractEventConnection) waitForNextResponseChunk() (result.Result, error) {
+	// TODO: add chunk timeout
 	processingResults, ok := <-be.resultChan
-	return be.postProcessEventRegularFlow(processingResults, !ok)
+	return be.postProcessResponseCheckForFailure(processingResults, !ok)
 }
 
 func (be *AbstractEventConnection) stop() error {
@@ -699,10 +699,19 @@ func (be *AbstractEventConnection) postProcessEventRegularFlow(processingResults
 		// - the result is not part of a stream (i.e., IsStream() is false), **or**
 		// - the client has disconnected.
 		// This ensures we clean up the logger in non-streaming scenarios or when streaming is no longer relevant.
-		be.functionLogger = nil
+		be.resetLogger()
 	}
 
 	return be.postProcessResponseCheckForFailure(processingResults, isClientDisconnected)
+}
+
+func (be *AbstractEventConnection) postProcessStreaming(stream *nuclio.ResponseStream) {
+	stream.StopStreaming()
+	be.resetLogger()
+}
+
+func (be *AbstractEventConnection) resetLogger() {
+	be.functionLogger = nil
 }
 
 func (be *AbstractEventConnection) postProcessResponseCheckForFailure(processingResults result.Result, isClientDisconnected bool) (result.Result, error) {
@@ -738,7 +747,7 @@ func (be *AbstractEventConnection) postProcessClientDisconnected() error {
 }
 
 func (be *AbstractEventConnection) postProcessEventOnTimeout() (*result.BatchedResults, error) {
-	be.functionLogger = nil
+	be.resetLogger()
 	be.Logger.WarnWith("Event processing timed out, connection should be restarted",
 		"localAddress", be.Conn.LocalAddr().String())
 	be.SetStatus(status.RestartRequired)
