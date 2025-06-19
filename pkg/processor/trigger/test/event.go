@@ -1,9 +1,10 @@
 package triggertest
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/nuclio/nuclio-sdk-go"
-	"time"
 )
 
 var (

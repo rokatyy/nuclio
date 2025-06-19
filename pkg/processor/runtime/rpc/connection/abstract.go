@@ -401,6 +401,10 @@ func (be *AbstractEventConnection) ProcessEventBatch(batch []nuclio.Event, funct
 }
 
 func (be *AbstractEventConnection) ProcessStream(stream *result.StreamStart) error {
+
+	// always close stream when processing is done
+	defer stream.ResponseStream.StopStreaming()
+
 	// start with writing a first chunk
 	// this is blocking operation, so it will wait until the reader is ready to receive data
 	if err := stream.WriteFirstChunk(); err != nil {
@@ -660,6 +664,7 @@ func (be *AbstractEventConnection) stop() error {
 	be.SetStatus(status.Stopping)
 	be.AbstractConnection.Stop()
 
+	var err error
 	// close start chan
 	// other two channels (result and cancel chan) are closed in the run handler
 	close(be.startChan)
@@ -667,7 +672,10 @@ func (be *AbstractEventConnection) stop() error {
 	// if the channel is closed while waiting for response in it, this will be handled in processItem() with no issues
 	close(be.resultChan)
 
-	err := be.Conn.Close()
+	if be.Conn != nil {
+		err = be.Conn.Close()
+	}
+
 	be.SetStatus(status.Stopped)
 	return err
 }

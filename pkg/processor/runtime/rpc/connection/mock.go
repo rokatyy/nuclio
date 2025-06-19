@@ -17,11 +17,13 @@ limitations under the License.
 package connection
 
 import (
+	"time"
+
 	"github.com/nuclio/nuclio/pkg/common/status"
 	"github.com/nuclio/nuclio/pkg/processor/eventprocessor"
 	"github.com/nuclio/nuclio/pkg/processor/statistics"
+
 	"github.com/stretchr/testify/mock"
-	"time"
 )
 
 type MockConnectionManager struct {

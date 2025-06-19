@@ -21,8 +21,9 @@ package encoder
 import (
 	"bytes"
 	"encoding/json"
-	triggertest "github.com/nuclio/nuclio/pkg/processor/trigger/test"
 	"testing"
+
+	triggertest "github.com/nuclio/nuclio/pkg/processor/trigger/test"
 
 	"github.com/google/uuid"
 	"github.com/nuclio/nuclio-sdk-go"

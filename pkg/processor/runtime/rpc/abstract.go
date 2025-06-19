@@ -242,7 +242,6 @@ func (r *AbstractRuntime) processEventAndWaitForResult(event nuclio.Event, funct
 			r.Logger.ErrorWith("Failed to process stream",
 				"stream", stream,
 				"error", streamErr)
-			return
 		}
 	}()
 
