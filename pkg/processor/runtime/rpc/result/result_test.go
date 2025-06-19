@@ -109,7 +109,7 @@ func (suite *ResultSuite) TestNewResultFromDataRawInputs() {
 
 	for _, testCase := range testCases {
 		suite.Run(testCase.name, func() {
-			result := NewResultFromData(suite.logger, testCase.rawData)
+			result := NewResultFromData(testCase.rawData)
 			suite.Require().NotNil(result, "expected result, got nil")
 
 			if testCase.expectedError {

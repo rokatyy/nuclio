@@ -4,7 +4,6 @@ package connection
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -25,29 +24,19 @@ import (
 type TestConnectionSuite struct {
 	suite.Suite
 	logger logger.Logger
-	ctx    context.Context
 }
 
 func (suite *TestConnectionSuite) SetupTest() {
 	var err error
-	suite.ctx = context.Background()
 	suite.logger, err = nucliozap.NewNuclioZapTest("abstract-connection")
 	suite.Require().NoError(err)
 }
 
 func (suite *TestConnectionSuite) TestStreamProcessing() {
 	mockManager := &MockConnectionManager{}
-	mockConfig := ManagerConfigration{
-		Kind:                        SocketAllocatorManagerKind,
-		SupportControlCommunication: true,
-		WaitForStart:                true,
-		eventTimeout:                10 * time.Second,
-		GetEventEncoderFunc: func(w io.Writer) encoder.EventEncoder {
-			return encoder.NewEventJSONEncoder(nil, w)
-		},
-	}
+	managerConfiguration := suite.getManagerConfiguration()
 
-	mockManager.On("GetConfig").Return(mockConfig).Twice()
+	mockManager.On("GetConfig").Return(managerConfiguration).Twice()
 	connection := NewAbstractEventConnection(suite.logger, mockManager)
 
 	var buffer bytes.Buffer
@@ -61,7 +50,7 @@ func (suite *TestConnectionSuite) TestStreamProcessing() {
 	defer close(sendMessageErrChan)
 	go func() {
 		var err error
-		//var duration time.Duration
+		// send stream messages to the connection's result channel
 		messages := []result.Result{result.NewStreamStart(responseStream), result.NewBodyOnlyFromBase64([]byte(testStreamValueBase64)), result.NewBodyOnlyFromBase64([]byte(testStreamValueBase64)),
 			&result.StreamEnd{}}
 		for index, message := range messages {
@@ -72,20 +61,26 @@ func (suite *TestConnectionSuite) TestStreamProcessing() {
 		}
 		sendMessageErrChan <- nil
 	}()
+	// process the event, which is a stream start
 	processingResult, err := connection.ProcessEvent(&triggertest.TestEvent{}, suite.logger)
 	suite.Require().NoError(err)
 	suite.Require().Equal(processingResult.GetProcessingResult(), responseStream)
+
+	// ensure that logger is still set
+	suite.Require().Equal(suite.logger, connection.functionLogger)
 
 	stream := processingResult.(*result.StreamStart)
 	streamProcessErrChan := make(chan error, 1)
 	defer close(streamProcessErrChan)
 	go func() {
+		// process the stream and writes the results to the io.writer
 		streamProcessErrChan <- connection.ProcessStream(stream)
 	}()
 
 	body := stream.GetBody().(io.ReadCloser)
 	data, err := io.ReadAll(body)
 	suite.Require().NoError(err)
+	suite.Require().Equal(fmt.Sprintf("%s%s", testStreamValue, testStreamValue), string(data))
 
 	streamProcessErr := <-streamProcessErrChan
 	suite.Require().NoError(streamProcessErr)
@@ -93,7 +88,20 @@ func (suite *TestConnectionSuite) TestStreamProcessing() {
 	sendMessageErr := <-sendMessageErrChan
 	suite.Require().NoError(sendMessageErr)
 
-	suite.Require().Equal(fmt.Sprintf("%s%s", testStreamValue, testStreamValue), string(data))
+	// after stream processing is finished, the stream should be closed and functionLogger should be nil
+	suite.Require().Equal(nil, connection.functionLogger)
+}
+
+func (suite *TestConnectionSuite) getManagerConfiguration() ManagerConfigration {
+	return ManagerConfigration{
+		Kind:                        SocketAllocatorManagerKind,
+		SupportControlCommunication: true,
+		WaitForStart:                true,
+		eventTimeout:                10 * time.Second,
+		GetEventEncoderFunc: func(w io.Writer) encoder.EventEncoder {
+			return encoder.NewEventJSONEncoder(nil, w)
+		},
+	}
 }
 
 func (suite *TestConnectionSuite) sendToChanOrFail(resultChan chan result.Result, message result.Result, timeout time.Duration) error {

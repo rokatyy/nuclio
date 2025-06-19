@@ -23,7 +23,6 @@ import (
 	"io"
 
 	"github.com/nuclio/errors"
-	"github.com/nuclio/logger"
 	"github.com/nuclio/nuclio-sdk-go"
 )
 
@@ -191,7 +190,7 @@ func NewBatchedResultsWithError(err error) *BatchedResults {
 	return &BatchedResults{Err: err}
 }
 
-func NewResultFromData(logger logger.Logger, data []byte) Result {
+func NewResultFromData(data []byte) Result {
 	switch data[0] {
 	case 'r':
 		// Try unmarshalling as batched results

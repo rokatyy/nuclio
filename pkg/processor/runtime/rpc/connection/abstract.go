@@ -512,7 +512,7 @@ func (be *AbstractEventConnection) RunHandler() {
 				// 'c' starts flow showing that it is a stream
 				// 'b' is every following message after 1st in a stream (it is a base64 encoded body only)
 				// 'e' is the end of the stream, which is always empty
-				be.resultChan <- result.NewResultFromData(be.Logger, data)
+				be.resultChan <- result.NewResultFromData(data)
 			case 'm':
 				be.handleResponseMetric(data[1:])
 			case 'l':
