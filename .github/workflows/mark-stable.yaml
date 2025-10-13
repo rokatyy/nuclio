@@ -14,6 +14,9 @@
 
 name: Mark Stable
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:
@@ -44,11 +47,6 @@ jobs:
       - name: Define targets
         id: set-matrix
         run: |
-          # If custom image is given, use it
-          if [[ -n "${{ github.event.inputs.docker_image_rule }}" ]]; then
-            export DOCKER_IMAGES_RULES="${{ github.event.inputs.docker_image_rule }}"
-          fi
-
           docker_image_rules_json=$(make print-docker-image-rules-json)
 
           # If "handler-builder-golang-onbuild" is in the matrix,
@@ -92,28 +90,41 @@ jobs:
           docker tag "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:${{ env.VERSION }}-$NUCLIO_ARCH" "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:stable-$NUCLIO_ARCH"
           docker push "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:stable-$NUCLIO_ARCH"
 
-  update-stable-tag:
-    name: Update GitHub Stable Tag
-    needs: tag-and-push-images
+  update-badge:
+    name: Create PR to update stable badge
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0  # fetch all tags for retagging
+          fetch-depth: 0
 
-      - name: Configure git
+      - name: Set up git
         run: |
           git config --global user.name "${{ env.GITHUB_ACTIONS_BOT_NAME }}"
           git config --global user.email "${{ env.GITHUB_ACTIONS_BOT_EMAIL }}"
 
-      - name: Update stable tag
+      - name: Run Make target to update badge
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: make update-stable-badge VERSION=${VERSION}
+
+      - name: Create branch for badge update
         run: |
-          git fetch --tags origin
-          if git rev-parse "v${{ github.event.inputs.version }}" >/dev/null 2>&1; then
-            git tag -f stable "v${{ github.event.inputs.version }}"
-            git push origin stable --force
-            echo "✅ Updated 'stable' tag to v${{ github.event.inputs.version }}"
-          else
-            echo "::error::Version tag v${{ github.event.inputs.version }} does not exist in the repository."
-            exit 1
-          fi
+          BRANCH_NAME="update-stable-badge-v${{ github.event.inputs.version }}"
+          git checkout -b "$BRANCH_NAME"
+          git push origin "$BRANCH_NAME"
+          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "[Readme] Update stable badge to ${{ github.event.inputs.version }}"
+          branch: ${{ env.BRANCH_NAME }}
+          title: "Update stable badge to v${{ github.event.inputs.version }}"
+          body: |
+            This PR updates the stable badge in `README.md` to version **v${{ github.event.inputs.version }}**.
+
+            ⚠️ **Reminder:**  
+            Please make sure to **manually retag stable** tag **before merging** this PR.
