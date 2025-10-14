@@ -1,5 +1,5 @@
 <!-- STABLE_BADGE_START -->
-![Stable Version](https://img.shields.io/badge/stable-v1.14.14-green)
+![Stable Version](https://img.shields.io/badge/stable-v1.15.2-green)
 <!-- STABLE_BADGE_END -->
 [![Long CI](https://github.com/nuclio/nuclio/actions/workflows/long_ci.yaml/badge.svg?branch=development)](https://github.com/nuclio/nuclio/actions/workflows/long_ci.yaml?query=event%3Aschedule)
 [![Documentation Status](https://readthedocs.org/projects/nuclio/badge/?version=latest)](https://nuclio.readthedocs.io/en/latest/?badge=latest)
