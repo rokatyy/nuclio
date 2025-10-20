@@ -165,8 +165,16 @@ func (suite *testSuite) WaitForBroker() error {
 	var containerLogs string
 	var containerLogsErr error
 
-	err := common.RetryUntilSuccessful(30*time.Second, 3*time.Second, func() bool {
+	err := common.RetryUntilSuccessful(100*time.Second, 3*time.Second, func() bool {
 		// fetch Kafka container logs
+		list, err := suite.DockerClient.GetContainers(&dockerclient.GetContainerOptions{})
+		containerNames := make([]string, len(list))
+		for _, container := range list {
+			containerNames = append(containerNames, container.Name)
+		}
+		suite.Require().NoError(err, "Failed to get container")
+		suite.Logger.InfoWith("Listing containers", "containerNames", containerNames)
+
 		containerLogs, containerLogsErr = suite.DockerClient.GetContainerLogs(suite.brokerContainerName)
 		if containerLogsErr != nil {
 			suite.Logger.WarnWith("Failed to get Kafka container logs", "err", containerLogsErr)
