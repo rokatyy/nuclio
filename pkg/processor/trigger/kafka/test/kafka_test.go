@@ -165,7 +165,7 @@ func (suite *testSuite) WaitForBroker() error {
 	var containerLogs string
 	var containerLogsErr error
 
-	err := common.RetryUntilSuccessful(100*time.Second, 3*time.Second, func() bool {
+	err := common.RetryUntilSuccessful(100*time.Second, 1*time.Second, func() bool {
 		// fetch Kafka container logs
 		list, err := suite.DockerClient.GetContainers(&dockerclient.GetContainerOptions{})
 		containerNames := make([]string, len(list))
