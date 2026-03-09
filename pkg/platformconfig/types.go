@@ -116,9 +116,23 @@ type ScaleToZero struct {
 
 	// Used for DLX options, specifies how often the DLX resync it's internal state
 	ResyncInterval string `json:"resyncInterval,omitempty"`
+
+	// Used for scaler options, specifies metrics client configuration and type
+	MetricsClient MetricsClientConfig `json:"metricsClient,omitempty"`
 }
 
 type ScaleToZeroMode string
+
+type MetricsTemplate struct {
+	Name     string `json:"name,omitempty"`
+	Template string `json:"template,omitempty"`
+}
+
+type MetricsClientConfig struct {
+	Kind      scalertypes.MetricsClientKind `json:"kind,omitempty"`
+	URL       string                        `json:"url,omitempty"`
+	Templates []MetricsTemplate             `json:"templates,omitempty"`
+}
 
 const (
 	EnabledScaleToZeroMode  ScaleToZeroMode = "enabled"
@@ -187,35 +201,41 @@ type PlatformKubeConfig struct {
 	KubeConfigPath string `json:"kubeConfigPath,omitempty"`
 
 	// TODO: Move IngressConfig here
-	DefaultServiceType                     corev1.ServiceType      `json:"defaultServiceType,omitempty"`
-	DefaultFunctionNodeSelector            map[string]string       `json:"defaultFunctionNodeSelector,omitempty"`
-	DefaultHTTPIngressHostTemplate         string                  `json:"defaultHTTPIngressHostTemplate,omitempty"`
-	DefaultHTTPIngressAnnotations          map[string]string       `json:"defaultHTTPIngressAnnotations,omitempty"`
-	DefaultHTTPIngressClassName            string                  `json:"defaultHTTPIngressClassName,omitempty"`
-	DefaultFunctionPriorityClassName       string                  `json:"defaultFunctionPriorityClassName,omitempty"`
-	DefaultFunctionServiceAccount          string                  `json:"defaultFunctionServiceAccount,omitempty"`
-	ValidFunctionPriorityClassNames        []string                `json:"validFunctionPriorityClassNames,omitempty"`
-	DefaultFunctionPodResources            PodResourceRequirements `json:"defaultFunctionPodResources,omitempty"`
-	DefaultSidecarResources                PodResourceRequirements `json:"defaultSidecarResources,omitempty"`
-	DefaultFunctionTolerations             []corev1.Toleration     `json:"defaultFunctionTolerations,omitempty"`
-	PreemptibleNodes                       *PreemptibleNodes       `json:"preemptibleNodes,omitempty"`
-	DefaultReadinessProbe                  *corev1.Probe           `json:"readinessProbe,omitempty"`
-	DefaultLivenessProbe                   *corev1.Probe           `json:"livenessProbe,omitempty"`
-	ElasticSearchConfig                    *ElasticSearchConfig    `json:"elasticSearchConfig,omitempty"`
-	ProjectSecretTemplate                  string                  `json:"projectSecretTemplate,omitempty"`
-	ProjectSecretAllowedServiceAccountsKey string                  `json:"projectSecretAllowedServiceAccountsKey,omitempty"`
-	ProjectSecretDefaultServiceAccountKey  string                  `json:"projectSecretDefaultServiceAccountKey,omitempty"`
+	DefaultServiceType                       corev1.ServiceType      `json:"defaultServiceType,omitempty"`
+	DefaultFunctionNodeSelector              map[string]string       `json:"defaultFunctionNodeSelector,omitempty"`
+	DefaultHTTPIngressHostTemplate           string                  `json:"defaultHTTPIngressHostTemplate,omitempty"`
+	DefaultHTTPIngressAnnotations            map[string]string       `json:"defaultHTTPIngressAnnotations,omitempty"`
+	DefaultHTTPIngressClassName              string                  `json:"defaultHTTPIngressClassName,omitempty"`
+	DefaultFunctionPriorityClassName         string                  `json:"defaultFunctionPriorityClassName,omitempty"`
+	DefaultFunctionServiceAccount            string                  `json:"defaultFunctionServiceAccount,omitempty"`
+	DefaultForbiddenServiceAccounts          []string                `json:"defaultForbiddenServiceAccounts,omitempty"`
+	ValidFunctionPriorityClassNames          []string                `json:"validFunctionPriorityClassNames,omitempty"`
+	DefaultFunctionPodResources              PodResourceRequirements `json:"defaultFunctionPodResources,omitempty"`
+	DefaultSidecarResources                  PodResourceRequirements `json:"defaultSidecarResources,omitempty"`
+	DefaultFunctionTolerations               []corev1.Toleration     `json:"defaultFunctionTolerations,omitempty"`
+	PreemptibleNodes                         *PreemptibleNodes       `json:"preemptibleNodes,omitempty"`
+	DefaultReadinessProbe                    *corev1.Probe           `json:"readinessProbe,omitempty"`
+	DefaultLivenessProbe                     *corev1.Probe           `json:"livenessProbe,omitempty"`
+	ElasticSearchConfig                      *ElasticSearchConfig    `json:"elasticSearchConfig,omitempty"`
+	ProjectSecretTemplate                    string                  `json:"projectSecretTemplate,omitempty"`
+	ProjectSecretAllowedServiceAccountsKey   string                  `json:"projectSecretAllowedServiceAccountsKey,omitempty"`
+	ProjectSecretForbiddenServiceAccountsKey string                  `json:"projectSecretForbiddenServiceAccountsKey,omitempty"`
+	ProjectSecretDefaultServiceAccountKey    string                  `json:"projectSecretDefaultServiceAccountKey,omitempty"`
 }
 
-// IsConfiguredToVerifyServiceAccountFromProject checks if the platform kube config is configured to verify service accounts
-func (pkc *PlatformKubeConfig) IsConfiguredToVerifyServiceAccountFromProject() bool {
+// IsConfiguredToVerifyServiceAccount checks if the platform kube config is configured to verify service accounts
+func (pkc *PlatformKubeConfig) IsConfiguredToVerifyServiceAccount() bool {
+	if len(pkc.DefaultForbiddenServiceAccounts) > 0 {
+		return true
+	}
 	// if project secret template is not specified, skip validation
 	if pkc.ProjectSecretTemplate == "" {
 		return false
 	}
 
-	// if project secret allowed service accounts key is not configured, skip validation
-	if pkc.ProjectSecretAllowedServiceAccountsKey == "" {
+	// if project secret service accounts keys are not configured, skip validation
+	if pkc.ProjectSecretAllowedServiceAccountsKey == "" &&
+		pkc.ProjectSecretForbiddenServiceAccountsKey == "" {
 		return false
 	}
 	return true
@@ -319,6 +339,24 @@ type IngressConfig struct {
 	Oauth2ProxyURL             string   `json:"oauth2ProxyURL,omitempty"`
 }
 
+// ServiceAccountConfig holds configuration for service account tokens
+type ServiceAccountConfig struct {
+	Enabled                bool    `json:"enabled,omitempty"`
+	TokenPath              string  `json:"tokenPath,omitempty"`
+	TokenExpirationSeconds int     `json:"tokenExpirationSeconds,omitempty"`
+	TokenRefreshRatio      float64 `json:"tokenRefreshRatio,omitempty"`
+}
+
+// LogProxyKind represents the type of log proxy backend (elasticsearch or opensearch)
+type LogProxyKind string
+
+const (
+	// LogProxyKindElasticSearch indicates an Elasticsearch backend
+	LogProxyKindElasticSearch LogProxyKind = "elasticsearch"
+	// LogProxyKindOpenSearch indicates an OpenSearch backend
+	LogProxyKindOpenSearch LogProxyKind = "opensearch"
+)
+
 type ElasticSearchConfig struct {
 	URL                  string `json:"url,omitempty"`
 	SSLVerificationMode  string `json:"sslVerificationMode,omitempty"`
@@ -326,6 +364,11 @@ type ElasticSearchConfig struct {
 	Password             string `json:"password,omitempty"`
 	Index                string `json:"index,omitempty"`
 	CustomQueryParameter string `json:"customQueryParameter,omitempty"`
+
+	// Kind specifies the log proxy backend type explicitly.
+	// If not set, the backend type is auto-detected by querying the search engine.
+	// Valid values: "elasticsearch", "opensearch"
+	Kind LogProxyKind `json:"kind,omitempty"`
 }
 
 type CronTriggerCreationMode string

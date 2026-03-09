@@ -36,7 +36,9 @@ import (
 	"github.com/nuclio/nuclio/pkg/platform"
 	mockedplatform "github.com/nuclio/nuclio/pkg/platform/mock"
 	"github.com/nuclio/nuclio/pkg/platformconfig"
+	"github.com/nuclio/nuclio/pkg/processor/build/runtime"
 	"github.com/nuclio/nuclio/pkg/processor/build/runtimeconfig"
+	"github.com/nuclio/nuclio/pkg/processor/trigger/rabbitmq"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/nuclio/errors"
@@ -59,6 +61,12 @@ const (
 	BriefErrorsMessageFile                   = "brief_errors_message.txt"
 	testProjectName                          = "test-project"
 )
+
+// mockRuntime wraps a concrete Runtime and overrides GetDefaultBaseImage for testing
+type mockRuntime struct {
+	runtime.Runtime
+	defaultBaseImage string
+}
 
 type AbstractPlatformTestSuite struct {
 	suite.Suite
@@ -375,6 +383,138 @@ func (suite *AbstractPlatformTestSuite) TestEnrichDefaultHttpTrigger() {
 	}
 }
 
+func (suite *AbstractPlatformTestSuite) TestEnrichRabbitMQTrigger() {
+	for _, testCase := range []struct {
+		Name             string
+		URL              string
+		InitialUsername  string
+		InitialPassword  string
+		ExpectedURL      string
+		ExpectedUsername string
+		ExpectedPassword string
+		ExpectError      bool
+	}{
+		{
+			Name:             "URL overrides explicit credentials",
+			URL:              "amqp://userFromURL:passFromURL@localhost:5672/",
+			InitialUsername:  "explicitUser",
+			InitialPassword:  "explicitPass",
+			ExpectedURL:      "amqp://localhost:5672/",
+			ExpectedUsername: "userFromURL",
+			ExpectedPassword: "passFromURL",
+		},
+		{
+			Name:             "URL without credentials keeps explicit credentials",
+			URL:              "amqp://localhost:5672/",
+			InitialUsername:  "explicitUser",
+			InitialPassword:  "explicitPass",
+			ExpectedURL:      "amqp://localhost:5672/",
+			ExpectedUsername: "explicitUser",
+			ExpectedPassword: "explicitPass",
+		},
+		{
+			Name:             "URL with only username overrides explicit username",
+			URL:              "amqp://userOnly@localhost:5672/",
+			InitialUsername:  "explicitUser",
+			InitialPassword:  "explicitPass",
+			ExpectedURL:      "amqp://localhost:5672/",
+			ExpectedUsername: "userOnly",
+			ExpectedPassword: "explicitPass",
+		},
+		{
+			Name:             "Empty URL keeps explicit credentials",
+			URL:              "",
+			InitialUsername:  "explicitUser",
+			InitialPassword:  "explicitPass",
+			ExpectedURL:      "",
+			ExpectedUsername: "explicitUser",
+			ExpectedPassword: "explicitPass",
+		},
+		{
+			Name:             "Malformed URL returns error and keeps original values",
+			URL:              "://bad_url",
+			InitialUsername:  "explicitUser",
+			InitialPassword:  "explicitPass",
+			ExpectedURL:      "://bad_url",
+			ExpectedUsername: "explicitUser",
+			ExpectedPassword: "explicitPass",
+			ExpectError:      true,
+		},
+	} {
+		suite.Run(testCase.Name, func() {
+			trigger := &functionconfig.Trigger{
+				URL:      testCase.URL,
+				Username: testCase.InitialUsername,
+				Password: testCase.InitialPassword,
+			}
+
+			err := suite.Platform.enrichRabbitMQTrigger(context.Background(), testCase.Name, trigger)
+
+			if testCase.ExpectError {
+				suite.Require().Error(err, "Expected error but got none")
+			} else {
+				suite.Require().NoError(err, "Unexpected error while enriching trigger")
+			}
+
+			suite.Require().Equal(testCase.ExpectedURL, trigger.URL, "Unexpected URL after enrichment")
+			suite.Require().Equal(testCase.ExpectedUsername, trigger.Username, "Unexpected username after enrichment")
+			suite.Require().Equal(testCase.ExpectedPassword, trigger.Password, "Unexpected password after enrichment")
+		})
+	}
+}
+
+func (suite *AbstractPlatformTestSuite) TestEnrichRabbitMQAckConfig() {
+	for _, testCase := range []struct {
+		Name               string
+		InitialAttributes  map[string]interface{}
+		ExpectedAttributes map[string]interface{}
+	}{
+		{
+			Name:              "Nil Attributes is filled with defaults",
+			InitialAttributes: nil,
+			ExpectedAttributes: map[string]interface{}{
+				"onError":        rabbitmq.OnProcessErrorNack,
+				"requeueOnError": false,
+			},
+		},
+		{
+			Name:              "Partial Attributes fills missing fields",
+			InitialAttributes: map[string]interface{}{"onError": rabbitmq.OnProcessErrorNack},
+			ExpectedAttributes: map[string]interface{}{
+				"onError":        rabbitmq.OnProcessErrorNack,
+				"requeueOnError": false,
+			},
+		},
+		{
+			Name: "Full Attributes remains unchanged",
+			InitialAttributes: map[string]interface{}{
+				"onError":        rabbitmq.OnProcessErrorNack,
+				"requeueOnError": true,
+			},
+			ExpectedAttributes: map[string]interface{}{
+				"onError":        rabbitmq.OnProcessErrorNack,
+				"requeueOnError": true,
+			},
+		},
+	} {
+		suite.Run(testCase.Name, func() {
+			trigger := &functionconfig.Trigger{
+				Attributes: make(map[string]interface{}),
+			}
+
+			if testCase.InitialAttributes != nil {
+				for k, v := range testCase.InitialAttributes {
+					trigger.Attributes[k] = v
+				}
+			}
+
+			err := suite.Platform.enrichRabbitMQAckConfig(trigger)
+			suite.Require().NoError(err)
+			suite.Require().Equal(testCase.ExpectedAttributes, trigger.Attributes)
+		})
+	}
+}
+
 func (suite *AbstractPlatformTestSuite) TestEnrichBatchConfiguration() {
 	for _, testCase := range []struct {
 		name                       string
@@ -486,6 +626,103 @@ func (suite *AbstractPlatformTestSuite) TestValidateBatchConfiguration() {
 			}}})
 			if testCase.expectError {
 				suite.Require().NotNil(err)
+			} else {
+				suite.Require().NoError(err)
+			}
+		})
+	}
+}
+
+func (suite *AbstractPlatformTestSuite) TestValidateStreamingFlushPeriod() {
+	for _, testCase := range []struct {
+		name        string
+		triggerKey  string
+		trigger     functionconfig.Trigger
+		expectError bool
+	}{
+		{
+			name:       "no attributes",
+			triggerKey: "http0",
+			trigger:    functionconfig.Trigger{Kind: "http", Name: "http0"},
+		},
+		{
+			name:       "empty attributes",
+			triggerKey: "http0",
+			trigger:    functionconfig.Trigger{Kind: "http", Name: "http0", Attributes: map[string]interface{}{}},
+		},
+		{
+			name:       "streamingFlushPeriod missing",
+			triggerKey: "http0",
+			trigger: functionconfig.Trigger{
+				Kind: "http", Name: "http0",
+				Attributes: map[string]interface{}{"readBufferSize": 4096},
+			},
+		},
+		{
+			name:       "streamingFlushPeriod empty string",
+			triggerKey: "http0",
+			trigger: functionconfig.Trigger{
+				Kind: "http", Name: "http0",
+				Attributes: map[string]interface{}{"streamingFlushPeriod": ""},
+			},
+		},
+		{
+			name:       "streamingFlushPeriod valid 1s",
+			triggerKey: "http0",
+			trigger: functionconfig.Trigger{
+				Kind: "http", Name: "http0",
+				Attributes: map[string]interface{}{"streamingFlushPeriod": "1s"},
+			},
+		},
+		{
+			name:       "streamingFlushPeriod valid 500ms",
+			triggerKey: "http0",
+			trigger: functionconfig.Trigger{
+				Kind: "http", Name: "http0",
+				Attributes: map[string]interface{}{"streamingFlushPeriod": "500ms"},
+			},
+		},
+		{
+			name:       "streamingFlushPeriod invalid duration",
+			triggerKey: "http0",
+			trigger: functionconfig.Trigger{
+				Kind: "http", Name: "http0",
+				Attributes: map[string]interface{}{"streamingFlushPeriod": "not-a-duration"},
+			},
+			expectError: true,
+		},
+		{
+			name:       "streamingFlushPeriod zero",
+			triggerKey: "http0",
+			trigger: functionconfig.Trigger{
+				Kind: "http", Name: "http0",
+				Attributes: map[string]interface{}{"streamingFlushPeriod": "0s"},
+			},
+			expectError: true,
+		},
+		{
+			name:       "streamingFlushPeriod negative",
+			triggerKey: "http0",
+			trigger: functionconfig.Trigger{
+				Kind: "http", Name: "http0",
+				Attributes: map[string]interface{}{"streamingFlushPeriod": "-1s"},
+			},
+			expectError: true,
+		},
+		{
+			name:       "streamingFlushPeriod wrong type",
+			triggerKey: "http0",
+			trigger: functionconfig.Trigger{
+				Kind: "http", Name: "http0",
+				Attributes: map[string]interface{}{"streamingFlushPeriod": 123},
+			},
+			expectError: true,
+		},
+	} {
+		suite.Run(testCase.name, func() {
+			err := suite.Platform.validateStreamingFlushPeriod(testCase.triggerKey, &testCase.trigger)
+			if testCase.expectError {
+				suite.Require().Error(err)
 			} else {
 				suite.Require().NoError(err)
 			}
@@ -1084,6 +1321,9 @@ func (suite *AbstractPlatformTestSuite) TestEnrichAndValidateFunctionTriggers() 
 					NumWorkers: 1,
 					Name:       "some-trigger",
 					Mode:       functionconfig.SyncTriggerWorkMode,
+					Attributes: map[string]interface{}{
+						"streamingFlushPeriod": functionconfig.DefaultStreamingFlushPeriod,
+					},
 				},
 			},
 		},
@@ -1094,6 +1334,9 @@ func (suite *AbstractPlatformTestSuite) TestEnrichAndValidateFunctionTriggers() 
 			triggers: nil,
 			expectedEnrichedTriggers: func() map[string]functionconfig.Trigger {
 				defaultHTTPTrigger := functionconfig.GetDefaultHTTPTrigger()
+				defaultHTTPTrigger.Attributes = map[string]interface{}{
+					"streamingFlushPeriod": functionconfig.DefaultStreamingFlushPeriod,
+				}
 				return map[string]functionconfig.Trigger{
 					defaultHTTPTrigger.Name: defaultHTTPTrigger,
 				}
@@ -1181,6 +1424,9 @@ func (suite *AbstractPlatformTestSuite) TestEnrichAndValidateFunctionTriggers() 
 					NumWorkers: 1,
 					Kind:       "http",
 					Mode:       functionconfig.SyncTriggerWorkMode,
+					Attributes: map[string]interface{}{
+						"streamingFlushPeriod": functionconfig.DefaultStreamingFlushPeriod,
+					},
 				},
 				"kafka-trigger": {
 					Kind:                     "kafka-cluster",
@@ -1210,6 +1456,9 @@ func (suite *AbstractPlatformTestSuite) TestEnrichAndValidateFunctionTriggers() 
 					NumWorkers: 1,
 					Name:       "http-trigger",
 					Mode:       functionconfig.SyncTriggerWorkMode,
+					Attributes: map[string]interface{}{
+						"streamingFlushPeriod": functionconfig.DefaultStreamingFlushPeriod,
+					},
 				},
 				"kafka-trigger": {
 					Kind:                     "kafka-cluster",
@@ -2164,6 +2413,7 @@ func (suite *AbstractPlatformTestSuite) TestValidateProcessingMode() {
 					Runtime: "python",
 					Triggers: map[string]functionconfig.Trigger{
 						"test-trigger": {
+							Name: "test-trigger",
 							Kind: "http",
 							Mode: functionconfig.SyncTriggerWorkMode,
 						},
@@ -2178,6 +2428,7 @@ func (suite *AbstractPlatformTestSuite) TestValidateProcessingMode() {
 					Runtime: "python",
 					Triggers: map[string]functionconfig.Trigger{
 						"test-trigger": {
+							Name:        "test-trigger",
 							Kind:        "http",
 							Mode:        functionconfig.SyncTriggerWorkMode,
 							AsyncConfig: &functionconfig.AsyncConfig{MaxConnectionsNumber: 10},
@@ -2194,6 +2445,7 @@ func (suite *AbstractPlatformTestSuite) TestValidateProcessingMode() {
 					Runtime: "python",
 					Triggers: map[string]functionconfig.Trigger{
 						"test-trigger": {
+							Name: "test-trigger",
 							Kind: "cron",
 							Mode: functionconfig.AsyncTriggerWorkMode,
 							AsyncConfig: &functionconfig.AsyncConfig{
@@ -2212,6 +2464,7 @@ func (suite *AbstractPlatformTestSuite) TestValidateProcessingMode() {
 					Runtime: "java",
 					Triggers: map[string]functionconfig.Trigger{
 						"test-trigger": {
+							Name: "test-trigger",
 							Kind: "http",
 							Mode: functionconfig.AsyncTriggerWorkMode,
 							AsyncConfig: &functionconfig.AsyncConfig{
@@ -2230,6 +2483,7 @@ func (suite *AbstractPlatformTestSuite) TestValidateProcessingMode() {
 					Runtime: "python",
 					Triggers: map[string]functionconfig.Trigger{
 						"test-trigger": {
+							Name: "test-trigger",
 							Kind: "http",
 							Mode: functionconfig.AsyncTriggerWorkMode,
 							AsyncConfig: &functionconfig.AsyncConfig{
@@ -2249,6 +2503,7 @@ func (suite *AbstractPlatformTestSuite) TestValidateProcessingMode() {
 					Runtime: "python",
 					Triggers: map[string]functionconfig.Trigger{
 						"test-trigger": {
+							Name: "test-trigger",
 							Kind: "http",
 							Mode: functionconfig.AsyncTriggerWorkMode,
 							AsyncConfig: &functionconfig.AsyncConfig{
@@ -2268,6 +2523,7 @@ func (suite *AbstractPlatformTestSuite) TestValidateProcessingMode() {
 					Runtime: "python",
 					Triggers: map[string]functionconfig.Trigger{
 						"test-trigger": {
+							Name: "test-trigger",
 							Kind: "http",
 							Mode: functionconfig.AsyncTriggerWorkMode,
 							AsyncConfig: &functionconfig.AsyncConfig{
@@ -2282,10 +2538,12 @@ func (suite *AbstractPlatformTestSuite) TestValidateProcessingMode() {
 		{
 			name: "set custom availability timeout -> error",
 			functionConfig: &functionconfig.Config{
+
 				Spec: functionconfig.Spec{
 					Runtime: "python",
 					Triggers: map[string]functionconfig.Trigger{
 						"test-trigger": {
+							Name: "test-trigger",
 							Kind: "http",
 							Mode: functionconfig.AsyncTriggerWorkMode,
 							AsyncConfig: &functionconfig.AsyncConfig{
@@ -2298,18 +2556,23 @@ func (suite *AbstractPlatformTestSuite) TestValidateProcessingMode() {
 			expectedError: "failed to parse connection availability timeout",
 		},
 	}
-
 	for _, testCase := range testCases {
 		suite.Run(testCase.name, func() {
+			validateError := func(err error) {
+				if testCase.expectedError == "" {
+					suite.Require().NoError(err)
+				} else {
+					suite.Require().Error(err)
+					suite.Contains(err.Error(), testCase.expectedError)
+				}
+			}
 			triggerInstance := testCase.functionConfig.Spec.Triggers["test-trigger"]
 			err := suite.Platform.validateProcessingMode(triggerInstance, testCase.functionConfig)
+			validateError(err)
 
-			if testCase.expectedError == "" {
-				suite.Require().NoError(err)
-			} else {
-				suite.Require().Error(err)
-				suite.Contains(err.Error(), testCase.expectedError)
-			}
+			// check that it is successfully validate from enrich triggers method as well
+			err = suite.Platform.validateTriggers(testCase.functionConfig)
+			validateError(err)
 		})
 	}
 }
@@ -2327,6 +2590,91 @@ func (suite *AbstractPlatformTestSuite) TestEnrichPythonVersion() {
 	suite.Require().Equal("python:3.12",
 		functionConfig.Spec.Runtime,
 		"Python version was not set to the default value")
+}
+
+func (suite *AbstractPlatformTestSuite) TestGetBaseImage() {
+	testCases := []struct {
+		name              string
+		baseImages        map[string]string
+		specRuntime       string
+		expectedBaseImage string
+	}{
+		{
+			name:              "No base images configured - returns default",
+			specRuntime:       "python:3.12",
+			expectedBaseImage: "gcr.io/iguazio/python:3.12",
+		},
+		{
+			name:              "Empty base images map - returns default",
+			specRuntime:       "nodejs",
+			expectedBaseImage: "gcr.io/iguazio/node:20",
+		},
+		{
+			name: "Base image configured for runtime name only",
+			baseImages: map[string]string{
+				"nodejs": "custom-nodejs:20",
+			},
+			specRuntime:       "nodejs",
+			expectedBaseImage: "custom-nodejs:20",
+		},
+		{
+			name: "Base image configured for runtime name and version",
+			baseImages: map[string]string{
+				"python:3.12": "custom-python-3.12:latest",
+			},
+			specRuntime:       "python:3.12",
+			expectedBaseImage: "custom-python-3.12:latest",
+		},
+		{
+			name: "No matching base image - returns default when runtime is not explicit",
+			baseImages: map[string]string{
+				"golang": "custom-golang:latest",
+			},
+			specRuntime:       "python:3.12",
+			expectedBaseImage: "gcr.io/iguazio/python:3.12",
+		},
+	}
+
+	for _, testCase := range testCases {
+		suite.Run(testCase.name, func() {
+			functionConfig := &functionconfig.Config{
+				Spec: functionconfig.Spec{
+					Runtime: testCase.specRuntime,
+				},
+			}
+			runtimeInstance := suite.createTestRuntime(functionConfig)
+			testRuntime := &mockRuntime{
+				Runtime:          runtimeInstance,
+				defaultBaseImage: "",
+			}
+
+			platformConfig := &platformconfig.Config{
+				RuntimeBaseImages: testCase.baseImages,
+			}
+			err := platformConfig.EnrichPlatformConfig()
+			suite.Require().NoError(err)
+
+			backupBaseImages := suite.Platform.Config.RuntimeBaseImages
+			suite.Platform.Config.RuntimeBaseImages = platformConfig.RuntimeBaseImages
+			defer func() {
+				suite.Platform.Config.RuntimeBaseImages = backupBaseImages
+			}()
+
+			result := suite.Platform.GetBaseImage(testRuntime)
+			suite.Require().Equal(testCase.expectedBaseImage, result)
+		})
+	}
+}
+
+func (suite *AbstractPlatformTestSuite) createTestRuntime(functionConfig *functionconfig.Config) runtime.Runtime {
+	runtimeName, _ := common.GetRuntimeNameAndVersion(functionConfig.Spec.Runtime)
+	factory, err := runtime.RuntimeRegistrySingleton.Get(runtimeName)
+	suite.Require().NoError(err)
+
+	runtimeInstance, err := factory.(runtime.Factory).Create(suite.Logger, "nop", "/tmp", functionConfig)
+	suite.Require().NoError(err)
+
+	return runtimeInstance
 }
 
 // Test that GetProcessorLogs() generates the expected formattedPodLogs and briefErrorsMessage

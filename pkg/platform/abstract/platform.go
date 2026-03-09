@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ import (
 	"github.com/nuclio/nuclio/pkg/processor/build"
 	"github.com/nuclio/nuclio/pkg/processor/build/runtime"
 	"github.com/nuclio/nuclio/pkg/processor/trigger"
+	"github.com/nuclio/nuclio/pkg/processor/trigger/rabbitmq"
 	"github.com/nuclio/nuclio/pkg/processor/util/partitionworker"
 
 	"github.com/distribution/reference"
@@ -655,7 +657,7 @@ func (ap *Platform) FilterProjectsByPermissions(ctx context.Context,
 	resources := make([]string, len(projects))
 	for idx, project := range projects {
 		projectName := project.GetConfig().Meta.Name
-		resources[idx] = opa.GenerateProjectResourceString(projectName, "")
+		resources[idx] = opa.GenerateProjectResourceString(projectName, ap.getOPAResourcesPrefix())
 	}
 
 	allowedList, err := ap.QueryOPAMultipleResources(ctx, resources, opaclient.ActionRead, permissionOptions)
@@ -697,7 +699,7 @@ func (ap *Platform) FilterFunctionsByPermissions(ctx context.Context,
 	for idx, function := range functions {
 		functionName := function.GetConfig().Meta.Name
 		projectName := function.GetConfig().Meta.Labels[common.NuclioResourceLabelKeyProjectName]
-		resources[idx] = opa.GenerateFunctionResourceString(projectName, functionName, "")
+		resources[idx] = opa.GenerateFunctionResourceString(projectName, functionName, ap.getOPAResourcesPrefix())
 	}
 
 	allowedList, err := ap.QueryOPAMultipleResources(ctx, resources, opaclient.ActionRead, permissionOptions)
@@ -742,7 +744,7 @@ func (ap *Platform) FilterFunctionEventsByPermissions(ctx context.Context,
 		resources = append(resources, opa.GenerateFunctionEventResourceString(projectName,
 			functionName,
 			functionEventName,
-			""))
+			ap.getOPAResourcesPrefix()))
 	}
 	allowedList, err := ap.QueryOPAMultipleResources(ctx, resources, opaclient.ActionRead, permissionOptions)
 	if err != nil {
@@ -1062,6 +1064,11 @@ func (ap *Platform) GetBaseImageRegistry(registry string, runtime runtime.Runtim
 		return imageRegistryRuntimeOverride, nil
 	}
 	return ap.ContainerBuilder.GetBaseImageRegistry(registry), nil
+}
+
+// GetBaseImage returns the base image resolved for the runtime (explicit or default)
+func (ap *Platform) GetBaseImage(runtime runtime.Runtime) string {
+	return runtime.GetBaseImageFromMap(ap.Config.RuntimeBaseImages)
 }
 
 // GetOnbuildImageRegistry returns onbuild image registry
@@ -1630,11 +1637,13 @@ func (ap *Platform) validateTriggers(functionConfig *functionconfig.Config) erro
 
 		// no more than one http trigger is allowed
 		if triggerInstance.Kind == "http" {
-			if !httpTriggerExists {
-				httpTriggerExists = true
-				continue
+			if httpTriggerExists {
+				return nuclio.NewErrBadRequest("There's more than one http trigger (unsupported)")
 			}
-			return nuclio.NewErrBadRequest("There's more than one http trigger (unsupported)")
+			httpTriggerExists = true
+			if err := ap.validateStreamingFlushPeriod(triggerKey, &triggerInstance); err != nil {
+				return nuclio.WrapErrBadRequest(err)
+			}
 		}
 
 		// explicit ack is only allowed for Static Allocation mode
@@ -1685,6 +1694,34 @@ func (ap *Platform) validateTriggers(functionConfig *functionconfig.Config) erro
 		}
 	}
 
+	return nil
+}
+
+// validateStreamingFlushPeriod validates the HTTP trigger's streamingFlushPeriod attribute.
+// When set, it must be a non-empty string that parses as a positive Go duration (e.g. "1s", "500ms").
+// Invalid or non-positive values cause validation to fail so deploy fails early instead of at stream time.
+func (ap *Platform) validateStreamingFlushPeriod(triggerKey string, triggerInstance *functionconfig.Trigger) error {
+	if triggerInstance.Attributes == nil {
+		return nil
+	}
+	attrValue, exists := triggerInstance.Attributes["streamingFlushPeriod"]
+	if !exists || attrValue == nil {
+		return nil
+	}
+	periodStr, ok := attrValue.(string)
+	if !ok {
+		return errors.Errorf("Invalid streamingFlushPeriod. Must be a string, got %T", attrValue)
+	}
+	if periodStr == "" {
+		return nil
+	}
+	flushPeriod, err := time.ParseDuration(periodStr)
+	if err != nil {
+		return errors.Wrapf(err, "Invalid streamingFlushPeriod %q", periodStr)
+	}
+	if flushPeriod <= 0 {
+		return errors.Errorf("Invalid streamingFlushPeriod. Must be positive, got %q", periodStr)
+	}
 	return nil
 }
 
@@ -1831,8 +1868,78 @@ func (ap *Platform) enrichTriggers(ctx context.Context, functionConfig *function
 		if err := ap.enrichProcessingMode(ctx, triggerName, &triggerInstance, functionConfig); err != nil {
 			return errors.Wrap(err, "Failed to enrich processing mode")
 		}
+		if triggerInstance.Kind == "http" {
+			ap.enrichHTTPTriggerStreamingFlushPeriod(ctx, triggerName, &triggerInstance, functionConfig)
+		}
+		if triggerInstance.Kind == "rabbit-mq" {
+			if err := ap.enrichRabbitMQTrigger(ctx, triggerName, &triggerInstance); err != nil {
+				return errors.Wrap(err, "Failed to enrich RabbitMQ trigger")
+			}
+		}
 
 		functionConfig.Spec.Triggers[triggerName] = triggerInstance
+	}
+
+	return nil
+}
+
+func (ap *Platform) enrichHTTPTriggerStreamingFlushPeriod(ctx context.Context, triggerName string, triggerInstance *functionconfig.Trigger, functionConfig *functionconfig.Config) {
+	if triggerInstance.Attributes == nil {
+		triggerInstance.Attributes = make(map[string]interface{})
+	}
+	if _, ok := triggerInstance.Attributes["streamingFlushPeriod"]; !ok || triggerInstance.Attributes["streamingFlushPeriod"] == "" {
+		ap.Logger.DebugWithCtx(ctx,
+			"Enriching streaming flush period for HTTP trigger",
+			"functionName", functionConfig.Meta.Name,
+			"trigger", triggerName,
+			"streamingFlushPeriod", functionconfig.DefaultStreamingFlushPeriod)
+		triggerInstance.Attributes["streamingFlushPeriod"] = functionconfig.DefaultStreamingFlushPeriod
+	}
+}
+
+func (ap *Platform) enrichRabbitMQTrigger(ctx context.Context, triggerName string, triggerInstance *functionconfig.Trigger) error {
+	// Parse the broker URL
+	parsedURL, err := url.Parse(triggerInstance.URL)
+	if err != nil {
+		return errors.Wrap(err, "Failed to parse RabbitMQ URL")
+	}
+
+	// Extract credentials if present
+	if parsedURL.User != nil {
+		if user := parsedURL.User.Username(); user != "" {
+			triggerInstance.Username = user
+		}
+
+		if pass, found := parsedURL.User.Password(); found {
+			triggerInstance.Password = pass
+		}
+
+		// Remove credentials from URL for security reasons
+		parsedURL.User = nil
+
+		triggerInstance.URL = parsedURL.String()
+
+		ap.Logger.DebugWithCtx(ctx,
+			"Extracted RabbitMQ credentials from URL",
+			"trigger", triggerName,
+			"brokerUrl", triggerInstance.URL,
+			"isUsernameSet", triggerInstance.Username != "",
+			"passwordSet", triggerInstance.Password != "",
+		)
+	}
+
+	return ap.enrichRabbitMQAckConfig(triggerInstance)
+}
+
+func (ap *Platform) enrichRabbitMQAckConfig(triggerInstance *functionconfig.Trigger) error {
+	if triggerInstance.Attributes == nil {
+		triggerInstance.Attributes = make(map[string]interface{})
+	}
+	if _, ok := triggerInstance.Attributes["onError"]; !ok {
+		triggerInstance.Attributes["onError"] = rabbitmq.OnProcessErrorNack
+	}
+	if _, ok := triggerInstance.Attributes["requeueOnError"]; !ok {
+		triggerInstance.Attributes["requeueOnError"] = false
 	}
 
 	return nil

@@ -31,6 +31,7 @@ import (
 	authIgzV4 "github.com/nuclio/nuclio/pkg/auth/iguazio/v4"
 	"github.com/nuclio/nuclio/pkg/auth/nop"
 	"github.com/nuclio/nuclio/pkg/common"
+	"github.com/nuclio/nuclio/pkg/common/annotations"
 	"github.com/nuclio/nuclio/pkg/containerimagebuilderpusher"
 	"github.com/nuclio/nuclio/pkg/functionconfig"
 	"github.com/nuclio/nuclio/pkg/platform"
@@ -49,6 +50,7 @@ import (
 	"github.com/nuclio/opa-client"
 	"github.com/nuclio/zap"
 	"github.com/rs/xid"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"k8s.io/api/core/v1"
@@ -698,7 +700,8 @@ func (suite *FunctionKubePlatformTestSuite) TestFunctionTriggersEnrichmentAndVal
 			expectedEnrichedTriggers: func() map[string]functionconfig.Trigger {
 				defaultHTTPTrigger := functionconfig.GetDefaultHTTPTrigger()
 				defaultHTTPTrigger.Attributes = map[string]interface{}{
-					"serviceType": suite.platformKubeConfig.DefaultServiceType,
+					"serviceType":          suite.platformKubeConfig.DefaultServiceType,
+					"streamingFlushPeriod": functionconfig.DefaultStreamingFlushPeriod,
 				}
 				return map[string]functionconfig.Trigger{
 					defaultHTTPTrigger.Name: defaultHTTPTrigger,
@@ -1210,6 +1213,229 @@ func (suite *FunctionKubePlatformTestSuite) TestValidateServiceAccount() {
 			err := suite.platform.validateServiceAccount(suite.ctx, functionConfig)
 			if testcase.expectedError != "" {
 				suite.Require().Error(err, testcase.expectedError)
+			} else {
+				suite.Require().NoError(err)
+			}
+		})
+	}
+}
+
+// TestValidateServiceAccountWithDefaultForbiddenList validates default forbidden list enforcement.
+func (suite *FunctionKubePlatformTestSuite) TestValidateServiceAccountWithDefaultForbiddenList() {
+	const forbiddenServiceAccount = "sa-forbidden"
+	config := &suite.platform.Config.Kube
+	oldAllowedKey, oldForbiddenKey := config.ProjectSecretAllowedServiceAccountsKey, config.ProjectSecretForbiddenServiceAccountsKey
+	oldProjectSecretTemplate, oldDefaultForbiddenList := config.ProjectSecretTemplate, config.DefaultForbiddenServiceAccounts
+	config.ProjectSecretAllowedServiceAccountsKey, config.ProjectSecretForbiddenServiceAccountsKey = "", ""
+	config.ProjectSecretTemplate, config.DefaultForbiddenServiceAccounts = "", []string{forbiddenServiceAccount}
+	defer func() {
+		config.ProjectSecretAllowedServiceAccountsKey, config.ProjectSecretForbiddenServiceAccountsKey = oldAllowedKey, oldForbiddenKey
+		config.ProjectSecretTemplate, config.DefaultForbiddenServiceAccounts = oldProjectSecretTemplate, oldDefaultForbiddenList
+	}()
+
+	functionConfig := &functionconfig.Config{
+		Meta: functionconfig.Meta{
+			Namespace: suite.Namespace,
+			Labels: map[string]string{
+				common.NuclioResourceLabelKeyProjectName: suite.projectName,
+			},
+		},
+		Spec: functionconfig.Spec{
+			ServiceAccount: forbiddenServiceAccount,
+		},
+	}
+
+	err := suite.platform.validateServiceAccount(suite.ctx, functionConfig)
+	suite.Require().Error(err)
+}
+
+func (suite *FunctionKubePlatformTestSuite) TestValidateSecretsAllowed_EnvFrom() {
+	projectName := "test-project-name"
+
+	for _, testCase := range []struct {
+		name          string
+		template      string
+		envFrom       []string
+		expectedError string
+	}{
+		{
+			template: "nuclio-project-secrets-{{ .ProjectName }}",
+			name:     "with-project-secret",
+			envFrom:  []string{"nuclio-project-secrets-test-project-name"},
+		},
+		{
+			template:      "nuclio-project-secrets-{{ .ProjectName }}",
+			name:          "with-another-project-secret",
+			envFrom:       []string{"nuclio-project-secrets-test1"},
+			expectedError: "Failed to validate Spec.EnvFrom",
+		},
+		{
+			name:    "with-another-project-secret",
+			envFrom: []string{"nuclio-project-secrets-test1"},
+		},
+	} {
+		suite.Run(testCase.name, func() {
+			oldProjectSecretTemplate := suite.platform.Config.Kube.ProjectSecretTemplate
+			defer func() {
+				suite.platform.Config.Kube.ProjectSecretTemplate = oldProjectSecretTemplate
+			}()
+			suite.platform.Config.Kube.ProjectSecretTemplate = testCase.template
+
+			functionConfig := &functionconfig.Config{
+				Meta: functionconfig.Meta{
+					Name:      "test-func",
+					Namespace: suite.Namespace,
+					Labels: map[string]string{
+						common.NuclioResourceLabelKeyProjectName: projectName,
+					},
+				},
+				Spec: functionconfig.Spec{
+					EnvFrom: lo.Map(testCase.envFrom, func(secret string, _ int) v1.EnvFromSource {
+						return v1.EnvFromSource{
+							SecretRef: &v1.SecretEnvSource{LocalObjectReference: v1.LocalObjectReference{Name: secret}},
+						}
+					}),
+				},
+			}
+
+			err := suite.platform.validateSecretsAllowed(suite.ctx, functionConfig)
+			if testCase.expectedError != "" {
+				suite.Require().ErrorContains(err, testCase.expectedError)
+			} else {
+				suite.Require().NoError(err)
+			}
+		})
+	}
+}
+
+func (suite *FunctionKubePlatformTestSuite) TestValidateSecretsAllowed_Env() {
+	projectName := "test-project-name"
+
+	for _, testCase := range []struct {
+		name          string
+		template      string
+		envSecrets    []string
+		expectedError string
+	}{
+		{
+			template:   "nuclio-project-secrets-{{ .ProjectName }}",
+			name:       "with-project-secret",
+			envSecrets: []string{"nuclio-project-secrets-test-project-name"},
+		},
+		{
+			template:      "nuclio-project-secrets-{{ .ProjectName }}",
+			name:          "with-another-project-secret",
+			envSecrets:    []string{"nuclio-project-secrets-test1"},
+			expectedError: "Failed to validate spec.Env",
+		},
+		{
+			name:       "with-another-project-secret-no-template",
+			envSecrets: []string{"nuclio-project-secrets-test1"},
+		},
+	} {
+		suite.Run(testCase.name, func() {
+			oldProjectSecretTemplate := suite.platform.Config.Kube.ProjectSecretTemplate
+			defer func() {
+				suite.platform.Config.Kube.ProjectSecretTemplate = oldProjectSecretTemplate
+			}()
+			suite.platform.Config.Kube.ProjectSecretTemplate = testCase.template
+
+			functionConfig := &functionconfig.Config{
+				Meta: functionconfig.Meta{
+					Name:      "test-func",
+					Namespace: suite.Namespace,
+					Labels: map[string]string{
+						common.NuclioResourceLabelKeyProjectName: projectName,
+					},
+				},
+				Spec: functionconfig.Spec{
+					Env: lo.Map(testCase.envSecrets, func(secret string, _ int) v1.EnvVar {
+						return v1.EnvVar{
+							Name: "MY_SECRET",
+							ValueFrom: &v1.EnvVarSource{
+								SecretKeyRef: &v1.SecretKeySelector{
+									LocalObjectReference: v1.LocalObjectReference{Name: secret},
+									Key:                  "key",
+								},
+							},
+						}
+					}),
+				},
+			}
+
+			err := suite.platform.validateSecretsAllowed(suite.ctx, functionConfig)
+			if testCase.expectedError != "" {
+				suite.Require().ErrorContains(err, testCase.expectedError)
+			} else {
+				suite.Require().NoError(err)
+			}
+		})
+	}
+}
+
+func (suite *FunctionKubePlatformTestSuite) TestValidateSecretsAllowed_Volumes() {
+	projectName := "test-project-name"
+
+	for _, testCase := range []struct {
+		name          string
+		template      string
+		volumeSecrets []string
+		expectedError string
+	}{
+		{
+			template:      "nuclio-project-secrets-{{ .ProjectName }}",
+			name:          "with-project-secret",
+			volumeSecrets: []string{"nuclio-project-secrets-test-project-name"},
+		},
+		{
+			template:      "nuclio-project-secrets-{{ .ProjectName }}",
+			name:          "with-another-project-secret",
+			volumeSecrets: []string{"nuclio-project-secrets-test1"},
+			expectedError: "Failed to validate spec.Volumes",
+		},
+		{
+			name:          "with-another-project-secret-no-template",
+			volumeSecrets: []string{"nuclio-project-secrets-test1"},
+		},
+	} {
+		suite.Run(testCase.name, func() {
+			oldProjectSecretTemplate := suite.platform.Config.Kube.ProjectSecretTemplate
+			defer func() {
+				suite.platform.Config.Kube.ProjectSecretTemplate = oldProjectSecretTemplate
+			}()
+			suite.platform.Config.Kube.ProjectSecretTemplate = testCase.template
+
+			functionConfig := &functionconfig.Config{
+				Meta: functionconfig.Meta{
+					Name:      "test-func",
+					Namespace: suite.Namespace,
+					Labels: map[string]string{
+						common.NuclioResourceLabelKeyProjectName: projectName,
+					},
+				},
+				Spec: functionconfig.Spec{
+					Volumes: lo.Map(testCase.volumeSecrets, func(secret string, _ int) functionconfig.Volume {
+						return functionconfig.Volume{
+							Volume: v1.Volume{
+								Name: secret,
+								VolumeSource: v1.VolumeSource{
+									Secret: &v1.SecretVolumeSource{
+										SecretName: secret,
+									},
+								},
+							},
+							VolumeMount: v1.VolumeMount{
+								Name:      secret,
+								MountPath: fmt.Sprintf("/etc/secrets/%s", secret),
+							},
+						}
+					}),
+				},
+			}
+
+			err := suite.platform.validateSecretsAllowed(suite.ctx, functionConfig)
+			if testCase.expectedError != "" {
+				suite.Require().ErrorContains(err, testCase.expectedError)
 			} else {
 				suite.Require().NoError(err)
 			}
@@ -1826,7 +2052,7 @@ func (suite *FunctionKubePlatformTestSuite) TestEnrichFunctionWithUserNameLabel(
 		},
 		{
 			name:         "igzV4",
-			session:      authIgzV4.NewSession("another-user", nil),
+			session:      authIgzV4.NewSession("another-user", "", nil, ""),
 			expectedUser: "another-user",
 		},
 	}
@@ -1958,7 +2184,7 @@ func (suite *FunctionKubePlatformTestSuite) TestUsernameLabelsEnrichment() {
 
 			switch testCase.authKind {
 			case auth.KindIguazioV4:
-				session = authIgzV4.NewSession(testCase.fullUsername, nil)
+				session = authIgzV4.NewSession(testCase.fullUsername, "", nil, "")
 			case auth.KindIguazio:
 				session = authIgzV1.NewSession(testCase.fullUsername, "", "", nil)
 			default:
@@ -1974,6 +2200,70 @@ func (suite *FunctionKubePlatformTestSuite) TestUsernameLabelsEnrichment() {
 
 			domainLabel := labels[iguazio.IguazioDomainLabel]
 			suite.Require().Equal(testCase.expectedDomainLabel, domainLabel)
+		})
+	}
+}
+
+func (suite *FunctionKubePlatformTestSuite) TestValidateAPIGatewayAuthentication() {
+	for _, testCase := range []struct {
+		name               string
+		authenticationMode ingress.AuthenticationMode
+		annotations        map[string]string
+		expectError        bool
+	}{
+		{
+			name:               "Valid iguazio authentication with empty annotations",
+			authenticationMode: ingress.AuthenticationModeIguazio,
+			annotations:        map[string]string{},
+			expectError:        false,
+		},
+		{
+			name:               "Valid not iguazio authentication mode with overrides",
+			authenticationMode: ingress.AuthenticationModeNone,
+			annotations: map[string]string{
+				annotations.NginxProxyBodySize: "100",
+			},
+			expectError: false,
+		},
+		{
+			name:               "Iguazio authentication with overrides",
+			authenticationMode: ingress.AuthenticationModeIguazio,
+			annotations: map[string]string{
+				annotations.NginxAuthResponseHeaders: "test-header",
+				annotations.NginxProxyBodySize:       "100",
+				annotations.NginxProxyBufferSize:     "200",
+				annotations.NginxServiceUpstream:     "false",
+				annotations.NginxSSLRedirect:         "false",
+				annotations.NginxAuthURL:             "test-url",
+				annotations.NginxAuthSignIn:          "test-sign-in",
+			},
+			expectError: true,
+		},
+		{
+			name:               "Iguazio authentication with a different annotation",
+			authenticationMode: ingress.AuthenticationModeIguazio,
+			annotations: map[string]string{
+				"test-annotation": "test-value",
+			},
+			expectError: false,
+		},
+	} {
+		suite.Run(testCase.name, func() {
+			testApiGatewayConfig := &platform.APIGatewayConfig{
+				Meta: platform.APIGatewayMeta{
+					Annotations: testCase.annotations,
+				},
+				Spec: platform.APIGatewaySpec{
+					AuthenticationMode: testCase.authenticationMode,
+				},
+			}
+
+			err := suite.platform.validateAPIGatewayAuthentication(testApiGatewayConfig)
+			if testCase.expectError {
+				suite.Require().Error(err)
+			} else {
+				suite.Require().Nil(err)
+			}
 		})
 	}
 }
@@ -2378,7 +2668,7 @@ func (suite *APIGatewayKubePlatformTestSuite) TestAPIGatewayEnrichmentAndValidat
 				}
 				return &apiGatewayConfig
 			}(),
-			authSession: authIgzV4.NewSession("some-username1", nil),
+			authSession: authIgzV4.NewSession("some-username1", "", nil, ""),
 		},
 		{
 			name: "ValidateNamespaceExistence",

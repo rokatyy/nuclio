@@ -28,6 +28,7 @@ import (
 
 	"github.com/nuclio/nuclio/pkg/auth/nop"
 	"github.com/nuclio/nuclio/pkg/common"
+	"github.com/nuclio/nuclio/pkg/common/annotations"
 	"github.com/nuclio/nuclio/pkg/containerimagebuilderpusher"
 	"github.com/nuclio/nuclio/pkg/errgroup"
 	"github.com/nuclio/nuclio/pkg/functionconfig"
@@ -750,6 +751,18 @@ func (p *Platform) CreateProject(ctx context.Context, createProjectOptions *plat
 		return errors.Wrap(err, "Failed to create project")
 	}
 
+	// ensure project permissions are populated in OPA
+	if err := common.RetryUntilSuccessful(time.Second*10,
+		time.Second*1,
+		func() bool {
+			if err := p.EnsureProjectRead(ctx, createProjectOptions.ProjectConfig.Meta.Name, &createProjectOptions.PermissionOptions); err != nil {
+				return false
+			}
+			return true
+		}); err != nil {
+		return errors.Wrap(err, "Failed to ensure project permissions are populated in OPA")
+	}
+
 	// adding to cache for 30 seconds, allowing
 	p.projectsCache.Set(
 		p.getProjectCacheKey(
@@ -1401,6 +1414,10 @@ func (p *Platform) ValidateFunctionConfig(ctx context.Context, functionConfig *f
 		return errors.Wrap(err, "Service account validation failed")
 	}
 
+	if err := p.validateSecretsAllowed(ctx, functionConfig); err != nil {
+		return errors.Wrap(err, "Secrets validation failed")
+	}
+
 	if err := p.validateInitContainersSpec(functionConfig); err != nil {
 		return errors.Wrap(err, "Init containers validation failed")
 	}
@@ -1911,6 +1928,10 @@ func (p *Platform) validateAPIGatewayConfig(ctx context.Context,
 		return errors.Wrap(err, "Failed to validate ingresses")
 	}
 
+	if err := p.validateAPIGatewayAuthentication(apiGateway); err != nil {
+		return errors.Wrap(err, "Failed to validate authentication")
+	}
+
 	return nil
 }
 
@@ -1946,7 +1967,7 @@ func (p *Platform) validateServiceAccount(ctx context.Context, functionConfig *f
 		return errors.New("Function does not have a project label, cannot validate service account")
 	}
 
-	if !p.Config.Kube.IsConfiguredToVerifyServiceAccountFromProject() {
+	if !p.Config.Kube.IsConfiguredToVerifyServiceAccount() {
 		return nil
 	}
 
@@ -1956,11 +1977,72 @@ func (p *Platform) validateServiceAccount(ctx context.Context, functionConfig *f
 		p.Config.Kube.ProjectSecretTemplate,
 		p.Config.Kube.ProjectSecretDefaultServiceAccountKey,
 		p.Config.Kube.ProjectSecretAllowedServiceAccountsKey,
+		p.Config.Kube.ProjectSecretForbiddenServiceAccountsKey,
+		p.Config.Kube.DefaultForbiddenServiceAccounts,
 		functionConfig.Spec.ServiceAccount,
 		projectName,
 		functionConfig.Meta.Namespace,
 		false); err != nil {
 		return errors.Wrap(err, "Failed to validate service account")
+	}
+	return nil
+}
+
+// validateSecretsAllowed ensures that the function does not reference any project secrets
+// that belong to a different project. It checks all secret references defined in EnvFrom,
+// Env, and Volumes
+func (p *Platform) validateSecretsAllowed(ctx context.Context, functionConfig *functionconfig.Config) error {
+	if p.GetConfig().Kube.ProjectSecretTemplate == "" {
+		return nil
+	}
+
+	projectName, ok := functionConfig.Meta.Labels[common.NuclioResourceLabelKeyProjectName]
+	if !ok {
+		return errors.New("Function does not have a project label, cannot validate secrets")
+	}
+
+	projectSecretName, err := utils.RenderProjectSecretName(p.GetConfig().Kube.ProjectSecretTemplate, projectName)
+	if err != nil {
+		return errors.Wrap(err, "Failed to render project secret name")
+	}
+
+	projectSecretPrefix, err := utils.RenderProjectSecretName(p.GetConfig().Kube.ProjectSecretTemplate, "")
+	if err != nil {
+		return errors.Wrap(err, "Failed to render project secret prefix")
+	}
+
+	for _, secret := range functionConfig.Spec.EnvFrom {
+		if secret.SecretRef != nil {
+			secretName := secret.SecretRef.Name
+			if err = p.validateSecretIsAllowed(secretName, projectSecretPrefix, projectSecretName); err != nil {
+				return errors.Wrap(err, "Failed to validate Spec.EnvFrom")
+			}
+		}
+	}
+
+	for _, secret := range functionConfig.Spec.Env {
+		if secret.ValueFrom != nil && secret.ValueFrom.SecretKeyRef != nil {
+			secretName := secret.ValueFrom.SecretKeyRef.Name
+			if err = p.validateSecretIsAllowed(secretName, projectSecretPrefix, projectSecretName); err != nil {
+				return errors.Wrap(err, "Failed to validate spec.Env")
+			}
+		}
+	}
+
+	for _, volume := range functionConfig.Spec.Volumes {
+		if volume.Volume.Secret != nil {
+			secretName := volume.Volume.Secret.SecretName
+			if err = p.validateSecretIsAllowed(secretName, projectSecretPrefix, projectSecretName); err != nil {
+				return errors.Wrap(err, "Failed to validate spec.Volumes")
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Platform) validateSecretIsAllowed(secretName, projectSecretPrefix, projectSecretName string) error {
+	if strings.HasPrefix(secretName, projectSecretPrefix) && secretName != projectSecretName {
+		return errors.New(fmt.Sprintf("Secret %s is not allowed. It belongs to a different project", secretName))
 	}
 	return nil
 }
@@ -2389,5 +2471,21 @@ func (p *Platform) validateProbeSpec(probe *v1.Probe) error {
 		return nuclio.NewErrBadRequest(formatProbesErr("FailureThreshold"))
 	}
 
+	return nil
+}
+
+func (p *Platform) validateAPIGatewayAuthentication(apiGatewayConfig *platform.APIGatewayConfig) error {
+	switch apiGatewayConfig.Spec.AuthenticationMode {
+	case ingress.AuthenticationModeIguazio:
+		// In iguazio authentication mode, overriding the authentication's annotations is restricted by design
+		// As the parameters optimized for the Iguazio tokens
+		restrictedAnnotations := annotations.GetIguazioAuthenticationModeAnnotations()
+		for annotationKey := range apiGatewayConfig.Meta.Annotations {
+			if _, isRestrictedAnnotation := restrictedAnnotations[annotationKey]; isRestrictedAnnotation {
+				return nuclio.NewErrBadRequest(fmt.Sprintf("Annotation cannot be overridden in iguazio authentication mode - %s", annotationKey))
+			}
+		}
+	default:
+	}
 	return nil
 }

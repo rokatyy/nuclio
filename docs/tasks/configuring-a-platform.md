@@ -4,6 +4,7 @@
 - [Overview](#overview)
 - [Creating a platform configuration in Kubernetes](#creating-a-platform-configuration-in-kubernetes)
 - [Configuration elements](#configuration-elements)
+- [Base Images (`baseImages`)](#base-images-baseimages)
 
 ### Overview
 
@@ -311,6 +312,34 @@ kubectl patch deployment nuclio-dashboard \
   ]'
 ```
 
+<a id="base-images"></a>
+### Base Images (`baseImages`)
+
+The `baseImages` configuration allows you to override the default base images used for building function processor images on a per-runtime basis.
+This is useful when you need to use custom base images, such as in air-gapped environments or when using private registries.
+If a runtime is not specified in the `baseImages` map, Nuclio will use the default base image for that runtime.
+
+The configuration is a map where:
+- **Key**: Runtime name (e.g., `golang`, `nodejs`); for Python, include both the name and version (e.g., `python:3.11`, `python:3.12`)
+- **Value**: The base image to use for that runtime
+
+Best practice example with explicit versions:
+```yaml
+runtimeBaseImages:
+  nodejs: "custom-registry.io/node:20"
+  python:3.11: "custom-registry.io/python:3.11"
+  python:3.12: "custom-registry.io/python:3.12"
+```
+
+In this example:
+- All Node.js functions will use `custom-registry.io/node:20` by default 
+- All Golang functions will use the default Nuclio Go base image (`gcr.io/iguazio/alpine:3.20`), since no image is explicitly specified
+- Python 3.11 functions will specifically use `custom-registry.io/python:3.11`
+- Python 3.12 functions will specifically use `custom-registry.io/python:3.12`
+- Other python functions (without a version-specific match) will use `custom-registry.io/python:3.12`, since `3.12` is the current default Python version
+
+> **Important - Python Version Compatibility:** Python base images are **not backward compatible** across versions. Each Python version requires its own wheel (.whl) files, and these wheels are not compatible across different Python versions.. Therefore, **avoid using a default Python base image** (i.e., `python` without a version). Always specify explicit Python versions (e.g., `python:3.12`, `python:3.11`).
+
 ## Project Secret-Based Service Account Enrichment and Validation
 
 Nuclio now supports enriching and validating service accounts using project-specific Kubernetes secrets. This enables fine-grained control over which service accounts are allowed to run functions for a given project.
@@ -324,19 +353,24 @@ platform:
   kube:
     projectSecretTemplate: "{{ .ProjectName }}-nuclio-project-secret"
     projectSecretAllowedServiceAccountsKey: "allowedServiceAccounts"
+    projectSecretForbiddenServiceAccountsKey: "forbiddenServiceAccounts"
     projectSecretDefaultServiceAccountKey: "defaultServiceAccount"
+    defaultForbiddenServiceAccounts:
+      - "cluster-admin"
+      - "restricted-sa"
 ```
 | Field                                    | Description                                                                                                                         |
 |------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
 | `projectSecretTemplate`                  | A Go template used to compute the name of the Kubernetes secret that holds project-specific settings.                               |
 | `projectSecretAllowedServiceAccountsKey` | The key in the secret that lists comma-separated allowed service accounts for the project.                                          |
+| `projectSecretForbiddenServiceAccountsKey` | The key in the secret that lists comma-separated forbidden service accounts for the project.                                      |
 | `projectSecretDefaultServiceAccountKey`  | The key in the secret containing the default service account for the project, used when no service account is explicitly specified. |
+| `defaultForbiddenServiceAccounts`       | A list of forbidden service accounts enforced across the platform (merged with secret-based forbidden list).                         |
 
 The `projectSecretTemplate` is rendered using the following context:
 ```go
 templateData := map[string]interface{}{
     "ProjectName": projectName,
-    "Namespace":   namespace,
 }
 ```
 This allows to dynamically construct the secret name based on the project and namespace.
@@ -346,6 +380,7 @@ Data in a secret example:
 ```yaml
   defaultServiceAccount: "project-service-account"
   allowedServiceAccounts: "project-service-account,team-a-sa,team-b-sa"
+  forbiddenServiceAccounts: "cluster-admin,restricted-sa"
 ```
 
 ### Enrichment and Validation logic overview
@@ -353,7 +388,9 @@ The function's service account (SA) is enriched or validated based on the presen
 
 #### ✅ Scenario 1: Function SA is provided & project secret exists
 - Validate that the provided SA is included in the list defined under the `allowedServiceAccounts` key in the secret.
+- Validate that the provided SA is **not** included in the merged forbidden list (platform + secret).
 - ❌ If the SA is **not** in the allowed list, the function deployment **fails**.
+- ❌ If the SA is **in** the forbidden list, the function deployment **fails**, even if it is allowed.
 
 #### ✅ Scenario 2: Function SA is provided & project secret does **not** exist
 - Use the function's provided SA **as-is**, with no validation or enrichment.

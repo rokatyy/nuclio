@@ -26,6 +26,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nuclio/nuclio/pkg/common"
@@ -495,20 +496,31 @@ func (h *http) handleRequest(ctx *fasthttp.RequestCtx) {
 			time.Duration(*h.configuration.WorkerAvailabilityTimeoutMilliseconds)*time.Millisecond)
 	}
 
-	workerReleased := false
+	// Use sync.Once to ensure worker is released exactly once, regardless of code path
+	var releaseOnce sync.Once
+	releaseWorker := func() {
+		releaseOnce.Do(func() {
+			h.WorkerAllocator.Release(workerInstance)
+		})
+	}
+
+	// Track if we're setting up streaming - if so, outer defer should NOT release
+	// (the streaming callback will handle release after streaming completes)
+	streamingMode := false
+
+	// Safety net: ensure worker is always released when handler returns
+	// But skip if we're in streaming mode (callback will release)
+	defer func() {
+		if !streamingMode {
+			releaseWorker()
+		}
+	}()
+
 	errorDuringProcessing := processError != nil || submitError != nil || timedOut
 	// if any error happened or response is not a stream, then release the worker instance asap
 	if errorDuringProcessing ||
 		response == nil || response != nil && !response.IsStream() {
-		h.WorkerAllocator.Release(workerInstance)
-		workerReleased = true
-	} else {
-		// in any other case (for now, only streaming case), defer the release of the worker instance
-		defer func() {
-			if !workerReleased {
-				h.WorkerAllocator.Release(workerInstance)
-			}
-		}()
+		releaseWorker()
 	}
 
 	// if we got a process error, check if we timed out
@@ -527,7 +539,7 @@ func (h *http) handleRequest(ctx *fasthttp.RequestCtx) {
 		switch errors.Cause(submitError) {
 
 		// no available workers
-		case eventprocessor.ErrNoAvailableObjects, eventprocessor.ErrAllObjectsAreTerminated:
+		case eventprocessor.ErrNoAvailableObjectsImmediately, eventprocessor.ErrNoAvailableObjectsTimeout, eventprocessor.ErrAllObjectsAreTerminated:
 			h.Logger.WarnWith("No workers available",
 				"err", submitError.Error())
 			ctx.Response.SetStatusCode(nethttp.StatusServiceUnavailable)
@@ -582,6 +594,17 @@ func (h *http) handleRequest(ctx *fasthttp.RequestCtx) {
 		}
 	}
 
+	// should be set before body is set
+	// set content type if set
+	if response.GetContentType() != "" {
+		ctx.SetContentType(response.GetContentType())
+	}
+
+	// set status code if set
+	if response.GetStatusCode() != 0 {
+		ctx.Response.SetStatusCode(response.GetStatusCode())
+	}
+
 	if fileStreamPath != "" {
 		fileResponse, err := newFileResponse(h.Logger, fileStreamPath, fileStreamDeleteAfterSend)
 		if err != nil {
@@ -594,6 +617,9 @@ func (h *http) handleRequest(ctx *fasthttp.RequestCtx) {
 
 			return
 		}
+		// this is not a blocking call, so we can use it only for file steaming, because the file persists on FS
+		// and worker is not involved in streaming
+		// it also closes fileResponse when done
 		ctx.Response.SetBodyStream(fileResponse, -1)
 	} else {
 		// set body
@@ -601,37 +627,52 @@ func (h *http) handleRequest(ctx *fasthttp.RequestCtx) {
 		case []byte:
 			ctx.Response.SetBodyRaw(response.GetBody().([]byte))
 		case io.ReadCloser:
-			if _, err := io.Copy(ctx.Response.BodyWriter(), typedResponse); err != nil {
-				h.Logger.ErrorWith("Failed to copy response body",
-					"error", err)
-				ctx.Response.SetStatusCode(nethttp.StatusInternalServerError)
-				return
-			}
+			// SetBodyStreamWriter registers a callback that runs AFTER the handler returns.
+			// The callback will release the worker after streaming completes.
+			// Mark streaming mode so the outer defer doesn't release early.
+			streamingMode = true
+			flushPeriod := h.configuration.streamingFlushPeriodDuration
+			ctx.SetBodyStreamWriter(func(w *bufio.Writer) {
+				// Ensure worker is released after streaming
+				defer releaseWorker()
+
+				// Copy stream from function (typedResponse) to the response writer (w).
+				// When flushPeriod <= 0 we pass w itself: data is written to the bufio.Writer and
+				// we only flush at the end below. When flushPeriod > 0 we wrap w in periodicFlushWriter
+				// so the buffer is flushed at most every flushPeriod during the copy, giving the client
+				// incremental data instead of only when the stream ends
+				var copyTarget io.Writer = w
+				if flushPeriod > 0 {
+					copyTarget = &periodicFlushWriter{writer: w, flushPeriod: flushPeriod}
+				}
+				_, copyErr := io.Copy(copyTarget, typedResponse)
+				if copyErr != nil {
+					h.Logger.WarnWith("Failed to copy stream to response", "error", copyErr)
+					// In sync mode, mark worker for restart to clean up connection resources
+					// (e.g., when client disconnected mid-stream)
+					// the reason why we do it only in sync mode is that in async mode,
+					// the connection will not be reused anyway
+					if h.configuration.Mode == TriggerModeSync {
+						workerInstance.SetStatus(status.RestartRequired)
+					}
+				}
+				// Close explicitly because io.Copy doesn't close the source,
+				// and SetBodyStreamWriter (unlike SetBodyStream) has no reference to close it
+				if err := typedResponse.Close(); err != nil {
+					h.Logger.WarnWith("Failed to close response stream", "error", err)
+				}
+
+				if streamingMode && copyErr == nil {
+					workerInstance.StreamProcessedSuccessfully()
+				}
+				// Flush any remaining buffered data
+				if err := w.Flush(); err != nil {
+					h.Logger.WarnWith("Failed to flush response stream", "error", err)
+				}
+			})
 		}
 	}
 
-	if response.IsStream() {
-		// signal to worker that the stream has been processed successfully
-		// worker will increment the statistics
-		workerInstance.StreamProcessedSuccessfully()
-	}
-
-	if !workerReleased {
-		// try to release the worker instance asap
-		// if code won't get here (because of the error, then the defer will take care of it)
-		h.WorkerAllocator.Release(workerInstance)
-		workerReleased = true
-	}
-
-	// set content type if set
-	if response.GetContentType() != "" {
-		ctx.SetContentType(response.GetContentType())
-	}
-
-	// set status code if set
-	if response.GetStatusCode() != 0 {
-		ctx.Response.SetStatusCode(response.GetStatusCode())
-	}
 }
 
 func (h *http) allocateEvents(size int) {

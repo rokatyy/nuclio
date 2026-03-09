@@ -76,3 +76,6 @@ substring
 kafka
 Kafka
 configs
+requeue
+requeued
+hardcoded

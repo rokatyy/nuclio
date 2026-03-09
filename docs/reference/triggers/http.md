@@ -17,12 +17,12 @@ available, a `503` error is returned.
 
 | **Path**                                               | **Type**        | **Description**                                                                                                                                                                                                                                                                                                       |
 |:-------------------------------------------------------|:----------------|:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| port                                                   | int             | The NodePort (or equivalent) on which the function will serve HTTP requests. If empty, chooses a random port within the platform range. When running on k8s, this only has effect if [serviceType](#attributes) of type `nodePort` is used                                                                |
+| port                                                   | int             | The NodePort (or equivalent) on which the function will serve HTTP requests. If empty, chooses a random port within the platform range. When running on k8s, this only has effect if [serviceType](#attributes) of type `nodePort` is used                                                                            |
 | <a id="attributes-ingresses"></a>ingresses.(name).host | string          | The host to which the ingress maps.                                                                                                                                                                                                                                                                                   |
 | ingresses.(name).hostTemplate                          | string          | The template used to generate an ingress host (use `@nuclio.fromDefault` for default template)                                                                                                                                                                                                                        |
 | ingresses.(name).paths                                 | list of strings | The paths that the ingress handles. Variables of the form `{{.<NAME>}}` can be specified using `.Name`, `.Namespace`, and `.Version`. For example, `/{{.Namespace}}-{{.Name}}/{{.Version}}` will result in a default ingress of `/namespace-name/version`.                                                            |
 | readBufferSize                                         | int             | Per-connection buffer size for reading requests.                                                                                                                                                                                                                                                                      |
-| maxRequestBodySize                                     | int             | Maximum request body size.                                                                                                                                                                                                                                                                                            |
+| maxRequestBodySize                                     | int             | Maximum request body size. (default: 4MiB)                                                                                                                                                                                                                                                                            |
 | reduceMemoryUsage                                      | bool            | Reduces memory usage at the cost of higher CPU usage if set to true.                                                                                                                                                                                                                                                  |
 | cors.enabled                                           | bool            | `true` to enable cross-origin resource sharing (CORS); (default: `false`).                                                                                                                                                                                                                                            |
 | cors.allowOrigins                                      | list of strings | Indicates that the CORS response can be shared with requesting code from the specified origin (`Access-Control-Allow-Origin` response header); (default: `['*']` to allow sharing with any origin, for requests without credentials).                                                                                 |
@@ -32,6 +32,7 @@ available, a `503` error is returned.
 | cors.preflightMaxAgeSeconds                            | int             | The number of seconds in which the results of a preflight request can be cached in a preflight result cache (`Access-Control-Max-Age` response header); (default: `-1` to indicate no preflight results caching).                                                                                                     |
 | <a id="attributes-serviceType"></a>serviceType         | string          | (Kubernetes only) Kubernetes `ServiceType`, used by the Kubernetes service to expose the trigger. The default `ServiceType` is `ClusterIP`, which means that by default the trigger won't be exposed outside of the cluster unless you configure a proper ingress or manually change the `ServiceType` to `NodePort`. |
 | disablePortPublishing                                  | bool            | (Docker only) Allow disabling publishing the function container port on the host network                                                                                                                                                                                                                              |
+| streamingFlushPeriod                                   | string (duration) | When the response body is streamed, the trigger flushes the response buffer to the client at most every this period (e.g. `"1s"`, `"500ms"`). This allows clients to receive data incrementally instead of only when the stream ends. Must be a positive duration. Default: `"1s"` (set during platform enrichment if omitted). |
 
 <a id="examples"></a>
 ## Examples
@@ -109,4 +110,14 @@ triggers:
           - "PATCH"
         allowCredentials: false
         preflightMaxAgeSeconds: 3600
+```
+
+With streaming flush period (for streamed response bodies) -
+
+```yaml
+triggers:
+  myHttpTrigger:
+    kind: "http"
+    attributes:
+      streamingFlushPeriod: "1s"
 ```

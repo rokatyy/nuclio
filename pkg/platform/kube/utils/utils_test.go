@@ -20,6 +20,7 @@ package utils
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/nuclio/nuclio/pkg/platform/kube/clients/kube"
@@ -161,20 +162,12 @@ func (suite *utilsTestSuite) newTestProbe(value int32) *v1.Probe {
 }
 
 func (suite *utilsTestSuite) TestRenderProjectSecretName() {
-	templateData := map[string]interface{}{
-		"ProjectName": "myproj",
-		"Namespace":   "ns1",
-	}
+	projectName := "myproj"
 	testCases := []struct {
 		name               string
 		template           string
 		expectedSecretName string
 	}{
-		{
-			name:               "WithProjectAndNamespace",
-			template:           "nuclio-project-secrets-{{ .ProjectName }}-{{ .Namespace }}",
-			expectedSecretName: "nuclio-project-secrets-myproj-ns1",
-		},
 		{
 			name:               "WithProjectOnly",
 			template:           "nuclio-project-secrets-{{ .ProjectName }}",
@@ -189,7 +182,7 @@ func (suite *utilsTestSuite) TestRenderProjectSecretName() {
 	for _, testCase := range testCases {
 		suite.Run(testCase.name, func() {
 
-			secretName, err := renderProjectSecretName(testCase.template, templateData)
+			secretName, err := RenderProjectSecretName(testCase.template, projectName)
 			suite.Require().NoError(err)
 			suite.Require().Equal(testCase.expectedSecretName, secretName)
 		})
@@ -200,11 +193,8 @@ func (suite *utilsTestSuite) TestGetProjectSecret() {
 	kubeClient := fake.NewSimpleClientset()
 	namespace := "ns1"
 	projectName := "myproj"
-	template := "nuclio-project-secrets-{{ .ProjectName }}-{{ .Namespace }}"
-	secretName, _ := renderProjectSecretName(template, map[string]interface{}{
-		"ProjectName": projectName,
-		"Namespace":   namespace,
-	})
+	template := "nuclio-project-secrets-{{ .ProjectName }}"
+	secretName, _ := RenderProjectSecretName(template, projectName)
 
 	secret := &v1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -363,6 +353,73 @@ func (suite *utilsTestSuite) TestIsServiceAccountAllowed() {
 	}
 }
 
+// TestIsServiceAccountForbidden validates forbidden service account checks.
+func (suite *utilsTestSuite) TestIsServiceAccountForbidden() {
+	const (
+		forbiddenKey          = "forbidden"
+		forbiddenService      = "sa-forbidden"
+		allowedService        = "sa-allowed"
+		forbiddenServiceUpper = "SA-FORBIDDEN"
+	)
+	secretData := &v1.Secret{
+		Data: map[string][]byte{
+			forbiddenKey: []byte(strings.Join([]string{forbiddenService, allowedService}, ",")),
+		},
+	}
+	testCases := []struct {
+		name              string
+		secret            *v1.Secret
+		key               string
+		platformForbidden []string
+		serviceAccount    string
+		expectErr         bool
+	}{
+		{
+			name:           "ForbiddenFromSecret",
+			secret:         secretData,
+			key:            forbiddenKey,
+			serviceAccount: forbiddenService,
+			expectErr:      true,
+		},
+		{
+			name:              "ForbiddenFromPlatform",
+			platformForbidden: []string{forbiddenServiceUpper},
+			serviceAccount:    forbiddenService,
+			expectErr:         true,
+		},
+		{
+			name:              "ForbiddenMergedLists",
+			secret:            secretData,
+			key:               forbiddenKey,
+			platformForbidden: []string{forbiddenServiceUpper},
+			serviceAccount:    forbiddenService,
+			expectErr:         true,
+		},
+		{
+			name:           "NotForbidden",
+			secret:         secretData,
+			key:            forbiddenKey,
+			serviceAccount: "sa-ok",
+		},
+		{
+			name:   "ServiceAccountEmpty",
+			secret: secretData,
+			key:    forbiddenKey,
+		},
+	}
+
+	for _, tc := range testCases {
+		suite.Run(tc.name, func() {
+			err := IsServiceAccountForbidden(tc.secret, tc.key, tc.platformForbidden, tc.serviceAccount)
+			if tc.expectErr {
+				suite.Require().Error(err)
+			} else {
+				suite.Require().NoError(err)
+			}
+		})
+	}
+}
+
 func (suite *utilsTestSuite) TestEnrichServiceAccount() {
 	secretData := &v1.Secret{
 		Data: map[string][]byte{
@@ -412,7 +469,7 @@ func (suite *utilsTestSuite) TestEnrichServiceAccount() {
 	}
 }
 
-func (suite *utilsTestSuite) TestGetAllowedServiceAccountsFromSecret() {
+func (suite *utilsTestSuite) TestGetServiceAccountsFromSecretAllowed() {
 	secretData := &v1.Secret{
 		Data: map[string][]byte{
 			"allowed": []byte("sa1,sa2"),
@@ -446,9 +503,52 @@ func (suite *utilsTestSuite) TestGetAllowedServiceAccountsFromSecret() {
 
 	for _, tc := range testCases {
 		suite.Run(tc.name, func() {
-			allowed, found := getAllowedServiceAccountsFromSecret(tc.secret, tc.key)
+			allowed, found := getServiceAccountsFromSecret(tc.secret, tc.key)
 			suite.Require().Equal(tc.found, found)
 			suite.Require().Equal(tc.expected, allowed)
+		})
+	}
+}
+
+// TestGetServiceAccountsFromSecretForbidden validates forbidden accounts parsing.
+func (suite *utilsTestSuite) TestGetServiceAccountsFromSecretForbidden() {
+	const forbiddenKey = "forbidden"
+	secretData := &v1.Secret{
+		Data: map[string][]byte{
+			forbiddenKey: []byte(strings.Join([]string{"sa1", "sa2"}, ",")),
+		},
+	}
+
+	testCases := []struct {
+		name     string
+		secret   *v1.Secret
+		key      string
+		expected []string
+		found    bool
+	}{
+		{
+			name:     "KeyFound",
+			secret:   secretData,
+			key:      forbiddenKey,
+			expected: []string{"sa1", "sa2"},
+			found:    true,
+		},
+		{
+			name:   "KeyMissing",
+			secret: secretData,
+			key:    "missing",
+		},
+		{
+			name: "NilSecret",
+			key:  forbiddenKey,
+		},
+	}
+
+	for _, tc := range testCases {
+		suite.Run(tc.name, func() {
+			forbidden, found := getServiceAccountsFromSecret(tc.secret, tc.key)
+			suite.Require().Equal(tc.found, found)
+			suite.Require().Equal(tc.expected, forbidden)
 		})
 	}
 }
@@ -456,15 +556,15 @@ func (suite *utilsTestSuite) TestGetAllowedServiceAccountsFromSecret() {
 func (suite *utilsTestSuite) TestEnrichAndValidateServiceAccount() {
 	namespace := "ns1"
 	projectName := "myproj"
-	template := "nuclio-project-secrets-{{ .ProjectName }}-{{ .Namespace }}"
+	template := "nuclio-project-secrets-{{ .ProjectName }}"
 	defaultKey := "default"
 	allowedKey := "allowed"
+	forbiddenKey := "forbidden"
 	defaultPlatformServiceAccount := "sa-platform-default"
+	forbiddenSecretServiceAccount := "sa-forbidden"
+	forbiddenPlatformServiceAccount := "sa-forbidden-platform"
 
-	secretName, _ := renderProjectSecretName(template, map[string]interface{}{
-		"ProjectName": projectName,
-		"Namespace":   namespace,
-	})
+	secretName, _ := RenderProjectSecretName(template, projectName)
 
 	secret := &v1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -472,25 +572,29 @@ func (suite *utilsTestSuite) TestEnrichAndValidateServiceAccount() {
 			Namespace: namespace,
 		},
 		Data: map[string][]byte{
-			defaultKey: []byte("sa-default"),
-			allowedKey: []byte("sa1,sa2"),
+			defaultKey:   []byte("sa-default"),
+			allowedKey:   []byte("sa1,sa2"),
+			forbiddenKey: []byte(forbiddenSecretServiceAccount),
 		},
 	}
 
 	testCases := []struct {
-		name           string
-		serviceAccount string
-		shouldEnrich   bool
-		secretData     map[string][]byte
-		expectedSA     string
-		expectErr      bool
-		template       string
-		secretExists   bool
+		name              string
+		serviceAccount    string
+		shouldEnrich      bool
+		secretData        map[string][]byte
+		forbiddenKey      string
+		platformForbidden []string
+		expectedSA        string
+		expectErr         bool
+		template          string
+		secretExists      bool
 	}{
 		{
 			name:           "AllowedExplicitSA",
 			serviceAccount: "sa1",
 			secretData:     secret.Data,
+			forbiddenKey:   forbiddenKey,
 			expectedSA:     "sa1",
 			template:       template,
 			secretExists:   true,
@@ -500,6 +604,7 @@ func (suite *utilsTestSuite) TestEnrichAndValidateServiceAccount() {
 			serviceAccount: "",
 			shouldEnrich:   true,
 			secretData:     secret.Data,
+			forbiddenKey:   forbiddenKey,
 			expectedSA:     "sa-default",
 			expectErr:      true, // sa-default is not in allowed list
 			template:       template,
@@ -509,9 +614,41 @@ func (suite *utilsTestSuite) TestEnrichAndValidateServiceAccount() {
 			name:           "NotAllowedSA",
 			serviceAccount: "sa3",
 			secretData:     secret.Data,
+			forbiddenKey:   forbiddenKey,
 			expectErr:      true,
 			template:       template,
 			secretExists:   true,
+		},
+		{
+			name:           "ForbiddenFromSecret",
+			serviceAccount: forbiddenSecretServiceAccount,
+			secretData:     secret.Data,
+			forbiddenKey:   forbiddenKey,
+			expectErr:      true,
+			template:       template,
+			secretExists:   true,
+		},
+		{
+			name:              "ForbiddenFromPlatform",
+			serviceAccount:    forbiddenPlatformServiceAccount,
+			platformForbidden: []string{forbiddenPlatformServiceAccount},
+			forbiddenKey:      forbiddenKey,
+			expectErr:         true,
+			template:          template,
+			secretExists:      true,
+		},
+		{
+			name:           "ForbiddenOverridesAllowed",
+			serviceAccount: "sa1",
+			secretData: map[string][]byte{
+				defaultKey:   []byte("sa-default"),
+				allowedKey:   []byte("sa1"),
+				forbiddenKey: []byte("sa1"),
+			},
+			forbiddenKey: forbiddenKey,
+			expectErr:    true,
+			template:     template,
+			secretExists: true,
 		},
 		{
 			name:           "NoRestrictionKeyMissing",
@@ -519,6 +656,7 @@ func (suite *utilsTestSuite) TestEnrichAndValidateServiceAccount() {
 			secretData: map[string][]byte{
 				defaultKey: []byte("sa-default"),
 			},
+			forbiddenKey: forbiddenKey,
 			expectedSA:   "sa-any",
 			template:     template,
 			secretExists: true,
@@ -526,6 +664,7 @@ func (suite *utilsTestSuite) TestEnrichAndValidateServiceAccount() {
 		{
 			name:           "SecretNotFound",
 			serviceAccount: "sa-any",
+			forbiddenKey:   forbiddenKey,
 			expectedSA:     "sa-any",
 			template:       template,
 		},
@@ -533,6 +672,7 @@ func (suite *utilsTestSuite) TestEnrichAndValidateServiceAccount() {
 			name:           "RenderSecretNameError",
 			serviceAccount: "sa-any",
 			secretData:     secret.Data,
+			forbiddenKey:   forbiddenKey,
 			expectErr:      true,
 			template:       "{{ .ProjectName }", // invalid template
 			secretExists:   true,
@@ -542,6 +682,7 @@ func (suite *utilsTestSuite) TestEnrichAndValidateServiceAccount() {
 			serviceAccount: "",
 			shouldEnrich:   true,
 			secretData:     map[string][]byte{}, // no default key in secret
+			forbiddenKey:   forbiddenKey,
 			expectedSA:     defaultPlatformServiceAccount,
 			template:       template,
 			secretExists:   true,
@@ -565,6 +706,8 @@ func (suite *utilsTestSuite) TestEnrichAndValidateServiceAccount() {
 				tc.template,
 				defaultKey,
 				allowedKey,
+				tc.forbiddenKey,
+				tc.platformForbidden,
 				tc.serviceAccount,
 				projectName,
 				namespace,

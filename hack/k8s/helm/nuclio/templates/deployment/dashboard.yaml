@@ -17,6 +17,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ template "nuclio.dashboardName" . }}
+  labels:
+    {{- include "nuclio.standardLabels.dashboard" . | nindent 4 }}
 spec:
   replicas: {{ .Values.dashboard.replicas }}
   selector:
@@ -34,6 +36,7 @@ spec:
         nuclio.io/app: dashboard
         nuclio.io/name: {{ template "nuclio.dashboardName" . }}
         nuclio.io/class: service
+        {{- include "nuclio.standardLabels.dashboard" . | nindent 8 }}
       annotations:
         nuclio.io/version: {{ .Values.dashboard.image.tag }}
         checksum/secret-registry-credentials: {{ include (print $.Template.BasePath "/secret/registry-credentials.yaml") . | sha256sum }}
@@ -108,6 +111,8 @@ spec:
           value: {{ .Values.dashboard.authConfig.iguazio.timeout }}
         - name: NUCLIO_AUTH_IGUAZIO_VERIFICATION_URL
           value: {{ .Values.dashboard.authConfig.iguazio.sessionVerificationURL }}
+        - name: NUCLIO_AUTH_IGUAZIO_VERIFICATION_METHOD
+          value: {{ .Values.dashboard.authConfig.iguazio.verificationMethod }}
         - name: NUCLIO_AUTH_IGUAZIO_VERIFICATION_DATA_ENRICHMENT_URL
           value: {{ .Values.dashboard.authConfig.iguazio.sessionVerificationDataEnrichmentURL }}
         - name: NUCLIO_AUTH_IGUAZIO_CACHE_SIZE

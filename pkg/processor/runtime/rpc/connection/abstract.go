@@ -370,7 +370,7 @@ func (be *AbstractEventConnection) ProcessEvent(event nuclio.Event, functionLogg
 
 	normalizedResult, normalisationErr := result.NormalizeToResultWithProcessingResult(processingResult)
 	if normalisationErr != nil {
-		return nil, errors.Wrap(normalisationErr, "Failed to normalize result")
+		return nil, errors.Wrap(normalisationErr, fmt.Sprintf("Failed to normalize result. Type is not supported: %T", processingResult))
 	}
 
 	return normalizedResult, err
@@ -384,7 +384,7 @@ func (be *AbstractEventConnection) ProcessEventBatch(batch []nuclio.Event, funct
 
 	normalizedResult, normalisationErr := result.NormalizeToBatchedResults(processingResult)
 	if normalisationErr != nil {
-		return nil, errors.Wrap(normalisationErr, "Failed to normalize result")
+		return nil, errors.Wrap(normalisationErr, fmt.Sprintf("Failed to normalize result. Type is not supported: %T", processingResult))
 	}
 
 	return normalizedResult, err
@@ -427,6 +427,18 @@ func (be *AbstractEventConnection) ProcessStream(stream *result.StreamStart) (er
 				return errors.Wrap(err, "Failed to send chunk to stream")
 			}
 			continue
+		case *result.SingleResult:
+			// During streaming, 'r' indicates an error response (e.g. handler raised after sending chunks).
+			// Consume it here so it does not orphan to the next request; stream is closed by return.
+			// TODO: add error type in the future (e.g. return or propagate stream error for observability).
+			be.Logger.WarnWith("ProcessStream: received SingleResult during stream — handler raised exception during streaming, closing stream",
+				"statusCode", typedChunk.StatusCode,
+				"LenExceptionBody", len(typedChunk.Body),
+				"receivedStatusCode", typedChunk.StatusCode)
+			if typedChunk.StatusCode != 0 {
+				stream.SetStatusCode(typedChunk.StatusCode)
+			}
+			return nil
 		default:
 			return errors.Errorf("Got unsupported message of type %T during stream processing", typedChunk)
 		}
@@ -714,6 +726,10 @@ func (be *AbstractEventConnection) waitForResponseWithOptionalTimeout(
 }
 
 func (be *AbstractEventConnection) postProcessEventRegularFlow(processingResults result.Result, isClientDisconnected bool) (result.Result, error) {
+
+	if processingResults == nil {
+		return nil, errors.New("Received nil processing results")
+	}
 	// We don't use defer to reset be.functionLogger since it decreases performance
 	if !processingResults.IsStream() || isClientDisconnected {
 		// Instead, we reset it immediately after execution **only if**:

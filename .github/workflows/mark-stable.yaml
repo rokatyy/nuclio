@@ -38,7 +38,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 0
@@ -47,14 +47,6 @@ jobs:
         id: set-matrix
         run: |
           docker_image_rules_json=$(make print-docker-image-rules-json)
-
-          # If "handler-builder-golang-onbuild" is in the matrix,
-          # then ensure "handler-builder-golang-onbuild-alpine" is there too.
-          docker_image_rules_json=$(echo $docker_image_rules_json | \
-            jq -c 'if any(.[]; .image_rule == "handler-builder-golang-onbuild") 
-                   then . + [{"image_rule":"handler-builder-golang-onbuild-alpine"}] 
-                   else . end')
-
           echo $docker_image_rules_json
           echo "matrix=$(echo $docker_image_rules_json | jq -c '[.[].image_rule]')" >> $GITHUB_OUTPUT
 
@@ -69,6 +61,10 @@ jobs:
           - arm64
           - amd64
         docker_image_rule: ${{ fromJson(needs.image_matrix_prep.outputs.matrix) }}
+        # issues with building on qemu
+        exclude:
+          - arch: arm64
+            docker_image_rule: handler-builder-dotnetcore-onbuild
     steps:
       - name: Prepare environment
         run: |
@@ -77,7 +73,7 @@ jobs:
           echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
 
       - name: Login to registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ${{ env.REPO }}
           username: ${{ secrets.QUAYIO_DOCKER_USERNAME }}
@@ -88,13 +84,21 @@ jobs:
           docker pull "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:${{ env.VERSION }}-$NUCLIO_ARCH"
           docker tag "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:${{ env.VERSION }}-$NUCLIO_ARCH" "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:stable-$NUCLIO_ARCH"
           docker push "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:stable-$NUCLIO_ARCH"
+          
+           # If it's handler-builder-golang-onbuild, also handle alpine variant
+          if [ "${{ matrix.docker_image_rule }}" = "handler-builder-golang-onbuild" ]; then
+            docker pull "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:${{ env.VERSION }}-$NUCLIO_ARCH-alpine"
+            docker tag "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:${{ env.VERSION }}-$NUCLIO_ARCH-alpine" \
+                       "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:stable-$NUCLIO_ARCH-alpine"
+            docker push "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:stable-$NUCLIO_ARCH-alpine"
+          fi
 
   update-badge:
     name: Create PR to update stable badge
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -110,22 +114,25 @@ jobs:
 
       - name: Create branch for badge update
         run: |
-          BRANCH_NAME="update-stable-badge-v${{ github.event.inputs.version }}"
+          VERSION="${{ github.event.inputs.version }}"
+          BRANCH_NAME="update-stable-badge-v${VERSION}"
           git checkout -b "$BRANCH_NAME"
           git push origin "$BRANCH_NAME"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
 
       - name: Create pull request
-        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "[Readme] Update stable badge to ${{ github.event.inputs.version }}"
+          commit-message: "[Readme] Update stable badge to v${{ env.VERSION }}"
           base: development
           branch: ${{ env.BRANCH_NAME }}
-          title: "Update stable badge to v${{ github.event.inputs.version }}"
+          title: "Update stable badge to v${{ env.VERSION }}"
           body: |
-            This PR updates the stable badge in `README.md` to version **v${{ github.event.inputs.version }}**.
-
+            This PR updates the stable badge in `README.md` to version **v${{ env.VERSION }}**.
+            
             ⚠️ **Reminder:**  
-            Please make sure to **manually retag stable** tag **before merging** this PR.
+            Please make sure to **manually retag stable** tag **before merging** this PR. Example:
+            `UPSTREAM=nuclio TAG=1.14.14 && git fetch $UPSTREAM tag $TAG && git tag -f stable $TAG && git push $UPSTREAM stable --force`
           delete-branch: true

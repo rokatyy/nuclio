@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/nuclio/nuclio/pkg/common"
+	"github.com/nuclio/nuclio/pkg/common/annotations"
 	"github.com/nuclio/nuclio/pkg/functionconfig"
 	"github.com/nuclio/nuclio/pkg/platform/abstract"
 	nuclioio "github.com/nuclio/nuclio/pkg/platform/kube/apis/nuclio.io/v1beta1"
@@ -35,11 +36,11 @@ import (
 	"dario.cat/mergo"
 	"github.com/google/go-cmp/cmp"
 	"github.com/nuclio/logger"
-	"github.com/nuclio/zap"
+	nucliozap "github.com/nuclio/zap"
 	"github.com/stretchr/testify/suite"
 	appsv1 "k8s.io/api/apps/v1"
 	autosv2 "k8s.io/api/autoscaling/v2"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apiresource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -126,6 +127,32 @@ func (suite *lazyTestSuite) TestNodeConstrains() {
 	deployment.Spec.Template.Spec.NodeName = functionInstance.Spec.NodeName
 	deployment.Spec.Template.Spec.NodeSelector = functionInstance.Spec.NodeSelector
 	deployment.Spec.Template.Spec.Affinity = functionInstance.Spec.Affinity
+}
+
+func (suite *lazyTestSuite) TestRuntimeClassName() {
+	runtimeClassName := "nvidia"
+	functionInstance := suite.getFunctionInstanceWithDefaultProbes("func-name")
+	functionInstance.Spec.RuntimeClassName = &runtimeClassName
+
+	resources, err := suite.client.CreateOrUpdate(suite.ctx, functionInstance, "")
+	suite.Require().NoError(err)
+	suite.Require().NotEmpty(resources)
+	deployment, err := resources.Deployment()
+	suite.Require().NoError(err)
+
+	suite.Require().Equal(&runtimeClassName, deployment.Spec.Template.Spec.RuntimeClassName)
+}
+
+func (suite *lazyTestSuite) TestRuntimeClassNameNil() {
+	functionInstance := suite.getFunctionInstanceWithDefaultProbes("func-name")
+
+	resources, err := suite.client.CreateOrUpdate(suite.ctx, functionInstance, "")
+	suite.Require().NoError(err)
+	suite.Require().NotEmpty(resources)
+	deployment, err := resources.Deployment()
+	suite.Require().NoError(err)
+
+	suite.Require().Nil(deployment.Spec.Template.Spec.RuntimeClassName)
 }
 
 func (suite *lazyTestSuite) TestEnrichIngressWithDefaultAnnotations() {
@@ -217,7 +244,7 @@ func (suite *lazyTestSuite) TestEnrichIngressWithDefaultIngressClassName() {
 }
 
 func (suite *lazyTestSuite) TestEnrichIngressTLS() {
-	sslRedirectAnnotation := "nginx.ingress.kubernetes.io/ssl-redirect"
+	sslRedirectAnnotation := annotations.NginxSSLRedirect
 
 	for _, testCase := range []struct {
 		name              string
@@ -309,7 +336,7 @@ func (suite *lazyTestSuite) TestEnrichIngressWithDefaultTLSSecret() {
 	suite.Require().NotNil(ingressInstance)
 
 	// make sure default TLS secret exists
-	sslRedirectAnnotation := "nginx.ingress.kubernetes.io/ssl-redirect"
+	sslRedirectAnnotation := annotations.NginxSSLRedirect
 	suite.Require().Equal(ingressInstance.Spec.TLS[0].SecretName, tlsSecretName)
 	suite.Require().Contains(ingressInstance.Annotations, sslRedirectAnnotation)
 	suite.Require().Equal("true", ingressInstance.Annotations[sslRedirectAnnotation])
