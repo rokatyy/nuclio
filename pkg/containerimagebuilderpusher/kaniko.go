@@ -275,6 +275,10 @@ func (k *Kaniko) compileJobSpec(ctx context.Context,
 		buildArgs = append(buildArgs, "--insecure-pull")
 	}
 
+	if buildOptions.Platform != "" {
+		buildArgs = append(buildArgs, fmt.Sprintf("--customPlatform=%s", buildOptions.Platform))
+	}
+
 	// Add user's custom flags
 	for flag := range buildOptions.BuildFlags {
 		buildArgs = append(buildArgs, flag)

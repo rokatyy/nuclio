@@ -1136,6 +1136,7 @@ func (b *Builder) buildProcessorImage(ctx context.Context) (string, error) {
 			NoBaseImagePull:     b.GetNoBaseImagePull(),
 			BuildFlags:          buildFlags,
 			BuildArgs:           buildArgs,
+			Platform:            fmt.Sprintf("%s/%s", b.versionInfo.OS, b.versionInfo.Arch),
 			RegistryURL:         registryURL,
 			RepoName:            b.resolveRepoName(registryURL),
 			SecretName:          b.resolveImagePullSecrets(),

@@ -44,6 +44,7 @@ type BuildOptions struct {
 	SecretName                               string
 	OutputImageFile                          string
 	BuildTimeoutSeconds                      int64
+	Platform                                 string
 	Affinity                                 *v1.Affinity
 	NodeSelector                             map[string]string
 	NodeName                                 string

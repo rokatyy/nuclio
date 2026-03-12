@@ -133,6 +133,7 @@ func (d *Docker) buildContainerImage(ctx context.Context, buildOptions *BuildOpt
 		Pull:           buildOptions.Pull,
 		BuildArgs:      buildOptions.BuildArgs,
 		BuildFlags:     buildOptions.BuildFlags,
+		Platform:       buildOptions.Platform,
 	})
 
 }
@@ -214,7 +215,8 @@ func (d *Docker) gatherArtifactsForSingleStageDockerfile(ctx context.Context,
 			onbuildArtifact.Image,
 			buildOptions.ContextDir,
 			onbuildArtifactPaths,
-			buildOptions.BuildArgs); err != nil {
+			buildOptions.BuildArgs,
+			buildOptions.Platform); err != nil {
 			return errors.Wrap(err, "Failed to copy objects from onbuild")
 		}
 	}
@@ -226,7 +228,8 @@ func (d *Docker) buildFromAndCopyObjectsFromContainer(ctx context.Context,
 	onbuildImage string,
 	contextDir string,
 	artifactPaths map[string]string,
-	buildArgs map[string]string) error {
+	buildArgs map[string]string,
+	platform string) error {
 
 	dockerfilePath := path.Join(contextDir, "Dockerfile.onbuild")
 
@@ -254,6 +257,7 @@ ARG NUCLIO_ARCH
 		ContextDir:     contextDir,
 		BuildArgs:      buildArgs,
 		DockerfilePath: dockerfilePath,
+		Platform:       platform,
 	}); err != nil {
 		return errors.Wrap(err, "Failed to build onbuild image")
 	}

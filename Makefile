@@ -476,6 +476,7 @@ handler-builder-python-onbuild: processor
 		--build-arg NUCLIO_PYTHON_BASE_IMAGE_NAME=$(NUCLIO_PYTHON_BASE_IMAGE_NAME) \
 		--cache-from $(NUCLIO_DOCKER_HANDLER_BUILDER_PYTHON_ONBUILD_IMAGE_NAME_CACHE) \
 		--file pkg/processor/build/runtime/python/docker/onbuild/Dockerfile \
+		--platform $(NUCLIO_OS)/$(NUCLIO_ARCH) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_PYTHON_ONBUILD_IMAGE_NAME) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_PYTHON_ONBUILD_IMAGE_NAME_CACHE) \
 		.
@@ -507,6 +508,7 @@ handler-builder-golang-onbuild-alpine: build-builder
 		--build-arg NUCLIO_BASE_ALPINE_IMAGE_TAG=$(NUCLIO_BASE_ALPINE_IMAGE_TAG) \
 		--cache-from $(NUCLIO_DOCKER_HANDLER_BUILDER_GOLANG_ONBUILD_ALPINE_IMAGE_NAME_CACHE) \
 		--file pkg/processor/build/runtime/golang/docker/onbuild/Dockerfile.alpine \
+		--platform $(NUCLIO_OS)/$(NUCLIO_ARCH) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_GOLANG_ONBUILD_ALPINE_IMAGE_NAME) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_GOLANG_ONBUILD_ALPINE_IMAGE_NAME_CACHE) \
 		.
@@ -526,6 +528,7 @@ handler-builder-golang-onbuild:
 		--build-arg NUCLIO_DOCKER_REPO=$(NUCLIO_DOCKER_REPO) \
 		--cache-from $(NUCLIO_DOCKER_HANDLER_BUILDER_GOLANG_ONBUILD_IMAGE_NAME_CACHE) \
 		--file pkg/processor/build/runtime/golang/docker/onbuild/Dockerfile \
+		--platform $(NUCLIO_OS)/$(NUCLIO_ARCH) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_GOLANG_ONBUILD_IMAGE_NAME) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_GOLANG_ONBUILD_IMAGE_NAME_CACHE) \
 		.
@@ -558,6 +561,7 @@ handler-builder-nodejs-onbuild: processor
 		--build-arg NUCLIO_DOCKER_REPO=$(NUCLIO_DOCKER_REPO) \
 		--file pkg/processor/build/runtime/nodejs/docker/onbuild/Dockerfile \
 		--cache-from $(NUCLIO_DOCKER_HANDLER_BUILDER_NODEJS_ONBUILD_IMAGE_NAME_CACHE) \
+		--platform $(NUCLIO_OS)/$(NUCLIO_ARCH) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_NODEJS_ONBUILD_IMAGE_NAME) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_NODEJS_ONBUILD_IMAGE_NAME_CACHE) \
 		.
@@ -581,6 +585,7 @@ handler-builder-ruby-onbuild: processor
 		--build-arg NUCLIO_DOCKER_REPO=$(NUCLIO_DOCKER_REPO) \
 		--file pkg/processor/build/runtime/ruby/docker/onbuild/Dockerfile \
 		--cache-from $(NUCLIO_DOCKER_HANDLER_BUILDER_RUBY_ONBUILD_IMAGE_NAME_CACHE) \
+		--platform $(NUCLIO_OS)/$(NUCLIO_ARCH) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_RUBY_ONBUILD_IMAGE_NAME) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_RUBY_ONBUILD_IMAGE_NAME_CACHE) \
 		.
@@ -605,6 +610,7 @@ handler-builder-dotnetcore-onbuild: processor
 		--build-arg NUCLIO_DOCKER_REPO=$(NUCLIO_DOCKER_REPO) \
 		--cache-from $(NUCLIO_DOCKER_HANDLER_BUILDER_DOTNETCORE_ONBUILD_IMAGE_NAME_CACHE) \
 		--file $(NUCLIO_ONBUILD_DOTNETCORE_DOCKERFILE_PATH) \
+		--platform $(NUCLIO_OS)/$(NUCLIO_ARCH) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_DOTNETCORE_ONBUILD_IMAGE_NAME) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_DOTNETCORE_ONBUILD_IMAGE_NAME_CACHE) \
 		.
@@ -628,6 +634,7 @@ handler-builder-java-onbuild: processor
 		--build-arg NUCLIO_DOCKER_JAVA_OPENJDK=$(NUCLIO_DOCKER_JAVA_OPENJDK) \
 		--cache-from $(NUCLIO_DOCKER_HANDLER_BUILDER_JAVA_ONBUILD_IMAGE_NAME_CACHE) \
 		--file pkg/processor/build/runtime/java/docker/onbuild/Dockerfile \
+		--platform $(NUCLIO_OS)/$(NUCLIO_ARCH) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_JAVA_ONBUILD_IMAGE_NAME) \
 		--tag $(NUCLIO_DOCKER_HANDLER_BUILDER_JAVA_ONBUILD_IMAGE_NAME_CACHE) \
 		.

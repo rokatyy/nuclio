@@ -990,12 +990,18 @@ func (c *ShellClient) build(buildOptions *BuildOptions, buildArgs string) error 
 		pullOption = "--pull"
 	}
 
-	buildCommand := fmt.Sprintf("docker build %s --force-rm -t %s -f %s %s %s %s .",
+	platformOption := ""
+	if buildOptions.Platform != "" {
+		platformOption = fmt.Sprintf("--platform %s", buildOptions.Platform)
+	}
+
+	buildCommand := fmt.Sprintf("docker build %s --force-rm -t %s -f %s %s %s %s %s .",
 		c.resolveDockerBuildNetwork(),
 		buildOptions.Image,
 		buildOptions.DockerfilePath,
 		cacheOption,
 		pullOption,
+		platformOption,
 		buildArgs)
 
 	retryOnErrorMessages := []string{

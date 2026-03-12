@@ -52,6 +52,7 @@ type BuildOptions struct {
 	Pull           bool
 	BuildArgs      map[string]string
 	BuildFlags     map[string]bool
+	Platform       string
 }
 
 // RunOptions are options for running a docker image
