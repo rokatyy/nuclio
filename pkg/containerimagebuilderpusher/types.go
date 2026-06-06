@@ -28,6 +28,26 @@ import (
 	"k8s.io/api/core/v1"
 )
 
+const (
+	// BuilderKindDocker uses the local Docker daemon to build images
+	BuilderKindDocker = "docker"
+
+	// BuilderKindKaniko uses Kaniko to build images as a Kubernetes Job (deprecated)
+	BuilderKindKaniko = "kaniko"
+
+	// BuilderKindBuildah uses Buildah to build images as a Kubernetes Job
+	BuilderKindBuildah = "buildah"
+)
+
+// BuildahConfig holds Buildah-specific configuration for the container image builder
+type BuildahConfig struct {
+	Image         string                `json:"image,omitempty"`
+	StorageDriver string                `json:"storageDriver,omitempty"`
+	Privileged    bool                  `json:"privileged,omitempty"`
+	BuildArgs     []string              `json:"buildArgs,omitempty"`
+	Resources     v1.ResourceRequirements `json:"resources,omitempty"`
+}
+
 // BuildOptions are options for building a container image
 type BuildOptions struct {
 	Image                                  string
@@ -82,6 +102,7 @@ type ContainerBuilderConfiguration struct {
 	InsecurePullRegistry                 bool
 	PushImagesRetries                    int
 	ImageFSExtractionRetries             int
+	Buildah                              BuildahConfig
 }
 
 func NewContainerBuilderConfiguration() (*ContainerBuilderConfiguration, error) {
@@ -162,6 +183,17 @@ func NewContainerBuilderConfiguration() (*ContainerBuilderConfiguration, error) 
 
 	containerBuilderConfiguration.DefaultServiceAccount = common.GetEnvOrDefaultString("NUCLIO_KANIKO_DEFAULT_SERVICE_ACCOUNT",
 		"")
+
+	if containerBuilderConfiguration.Buildah.Image == "" {
+		containerBuilderConfiguration.Buildah.Image = common.GetEnvOrDefaultString(
+			"NUCLIO_BUILDAH_CONTAINER_IMAGE", "quay.io/buildah/stable")
+	}
+	if containerBuilderConfiguration.Buildah.StorageDriver == "" {
+		containerBuilderConfiguration.Buildah.StorageDriver = common.GetEnvOrDefaultString(
+			"NUCLIO_BUILDAH_STORAGE_DRIVER", "vfs")
+	}
+	containerBuilderConfiguration.Buildah.Privileged = common.GetEnvOrDefaultBool(
+		"NUCLIO_BUILDAH_PRIVILEGED", false)
 
 	return &containerBuilderConfiguration, nil
 }
