@@ -136,6 +136,29 @@ const (
 	AutoScaleMetricsModeCustom AutoScaleMetricsMode = "custom"
 )
 
+type BuilderMode string
+
+const (
+	BuilderModeDocker  BuilderMode = "docker"
+	BuilderModeKaniko  BuilderMode = "kaniko"
+	BuilderModeBuildah BuilderMode = "buildah"
+)
+
+// BuildahConfig holds configuration for the Buildah container image builder.
+type BuildahConfig struct {
+	Image         string                      `json:"image,omitempty"`
+	StorageDriver string                      `json:"storageDriver,omitempty"`
+	Privileged    bool                        `json:"privileged,omitempty"`
+	BuildArgs     []string                    `json:"buildArgs,omitempty"`
+	Resources     corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// BuilderConfig configures which container image builder to use for function builds.
+type BuilderConfig struct {
+	Mode    BuilderMode  `json:"mode,omitempty"`
+	Buildah BuildahConfig `json:"buildah,omitempty"`
+}
+
 func AutoScaleMetricsModeIsValid(autoScaleMode AutoScaleMetricsMode) bool {
 	for _, mode := range []AutoScaleMetricsMode{
 		AutoScaleMetricsModeLegacy,
@@ -205,6 +228,7 @@ type PlatformKubeConfig struct {
 	ProjectSecretTemplate                  string                  `json:"projectSecretTemplate,omitempty"`
 	ProjectSecretAllowedServiceAccountsKey string                  `json:"projectSecretAllowedServiceAccountsKey,omitempty"`
 	ProjectSecretDefaultServiceAccountKey  string                  `json:"projectSecretDefaultServiceAccountKey,omitempty"`
+	Builder                                BuilderConfig           `json:"builder,omitempty"`
 }
 
 // IsConfiguredToVerifyServiceAccountFromProject checks if the platform kube config is configured to verify service accounts
@@ -351,6 +375,9 @@ const (
 	DefaultStreamMonitoringWebapiURL = "http://v3io-webapi:8081"
 	DefaultV3ioRequestConcurrency    = 64
 	DefaultHTTPIngressClassName      = "nginx"
+
+	DefaultBuildahImage         = "quay.io/buildah/stable"
+	DefaultBuildahStorageDriver = "vfs"
 )
 
 type StreamMonitoringConfig struct {

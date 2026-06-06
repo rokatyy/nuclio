@@ -188,6 +188,7 @@ func (c *Config) EnrichPlatformConfig() error {
 	utils.EnrichProbe(&c.Kube.DefaultReadinessProbe, defaultPlatformConfiguration.Kube.DefaultReadinessProbe)
 	utils.EnrichProbe(&c.Kube.DefaultLivenessProbe, defaultPlatformConfiguration.Kube.DefaultLivenessProbe)
 	c.enrichElasticSearchConfig()
+	c.enrichBuildahConfig()
 
 	return nil
 }
@@ -508,6 +509,27 @@ func (c *Config) enrichElasticSearchConfig() {
 	// override with environment variable if set
 	if envPassword := os.Getenv("NUCLIO_ELASTIC_SEARCH_PASSWORD"); envPassword != "" {
 		c.Kube.ElasticSearchConfig.Password = envPassword
+	}
+}
+
+func (c *Config) enrichBuildahConfig() {
+	if c.Kube.Builder.Buildah.Image == "" {
+		c.Kube.Builder.Buildah.Image = DefaultBuildahImage
+	}
+	if c.Kube.Builder.Buildah.StorageDriver == "" {
+		c.Kube.Builder.Buildah.StorageDriver = DefaultBuildahStorageDriver
+	}
+	if c.Kube.Builder.Buildah.Resources.Requests == nil {
+		c.Kube.Builder.Buildah.Resources.Requests = v1.ResourceList{
+			v1.ResourceCPU:    apiresource.MustParse("500m"),
+			v1.ResourceMemory: apiresource.MustParse("1Gi"),
+		}
+	}
+	if c.Kube.Builder.Buildah.Resources.Limits == nil {
+		c.Kube.Builder.Buildah.Resources.Limits = v1.ResourceList{
+			v1.ResourceCPU:    apiresource.MustParse("2"),
+			v1.ResourceMemory: apiresource.MustParse("4Gi"),
+		}
 	}
 }
 
