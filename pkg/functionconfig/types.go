@@ -446,6 +446,7 @@ type Build struct {
 	TempDir               string                 `json:"tempDir,omitempty"`
 	Registry              string                 `json:"registry,omitempty"`
 	BaseImageRegistry     string                 `json:"baseImageRegistry,omitempty"`
+	ImagePullSecrets      []string               `json:"imagePullSecrets,omitempty"`
 	Image                 string                 `json:"image,omitempty"`
 	NoBaseImagesPull      bool                   `json:"noBaseImagesPull,omitempty"`
 	NoCache               bool                   `json:"noCache,omitempty"`
