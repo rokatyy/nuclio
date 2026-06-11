@@ -28,7 +28,7 @@ import (
 	"github.com/nuclio/nuclio/pkg/processor/build/runtime"
 
 	"github.com/nuclio/logger"
-	nucliozap "github.com/nuclio/zap"
+	"github.com/nuclio/zap"
 	"github.com/stretchr/testify/suite"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -284,11 +284,11 @@ func (suite *BuildahTestSuite) TestRegistryAuthSecretMountPresent() {
 	for _, v := range jobSpec.Spec.Template.Spec.Volumes {
 		if v.Name == "docker-config" {
 			foundVol = true
-			suite.Require().NotNil(v.VolumeSource.Secret)
-			suite.Equal("my-registry-secret", v.VolumeSource.Secret.SecretName)
-			suite.Require().Len(v.VolumeSource.Secret.Items, 1)
-			suite.Equal(".dockerconfigjson", v.VolumeSource.Secret.Items[0].Key)
-			suite.Equal("config.json", v.VolumeSource.Secret.Items[0].Path)
+			suite.Require().NotNil(v.Secret)
+			suite.Equal("my-registry-secret", v.Secret.SecretName)
+			suite.Require().Len(v.Secret.Items, 1)
+			suite.Equal(".dockerconfigjson", v.Secret.Items[0].Key)
+			suite.Equal("config.json", v.Secret.Items[0].Path)
 			break
 		}
 	}

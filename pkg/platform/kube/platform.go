@@ -1432,20 +1432,20 @@ func (p *Platform) InitializeContainerBuilder() error {
 	containerBuilderConfiguration := p.GetConfig().ContainerBuilderConfiguration
 
 	// create container builder
-	if containerBuilderConfiguration.Kind == "kaniko" {
+	switch containerBuilderConfiguration.Kind {
+	case "kaniko":
 		p.ContainerBuilder, err = containerimagebuilderpusher.NewKaniko(p.Logger,
 			p.consumer.KubeClientSet, containerBuilderConfiguration)
 		if err != nil {
 			return errors.Wrap(err, "Failed to create a kaniko builder")
 		}
-	} else if containerBuilderConfiguration.Kind == "buildah" {
+	case "buildah":
 		p.ContainerBuilder, err = containerimagebuilderpusher.NewBuildah(p.Logger,
 			p.consumer.KubeClientSet, containerBuilderConfiguration)
 		if err != nil {
 			return errors.Wrap(err, "Failed to create a buildah builder")
 		}
-	} else {
-
+	default:
 		// Default container image builder
 		p.ContainerBuilder, err = containerimagebuilderpusher.NewDocker(p.Logger,
 			containerBuilderConfiguration)

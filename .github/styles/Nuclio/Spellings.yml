@@ -22,6 +22,7 @@ filters:
   - "[Ii]guazio('s)?"
   - "[Gg]ateway('s)?"
   - "[Kk]aniko('s)?"
+  - "[Bb]uildah('s)?"
   - "Dockerfile(s)?"
   - "[a-z]+[A-Z][a-zA-Z]*|[a-z]+(_[a-z]+)+"
   - "[Aa][Cc][Kk][Ss]?"
