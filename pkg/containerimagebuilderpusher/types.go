@@ -70,6 +70,8 @@ type ContainerBuilderConfiguration struct {
 	RegistryProviderSecretName           string
 	KanikoImage                          string
 	KanikoImagePullPolicy                string
+	BuildahImage                         string
+	BuildahImagePullPolicy               string
 	JobPrefix                            string
 	JobDeletionTimeout                   time.Duration
 	DefaultRegistryCredentialsSecretName string
@@ -112,6 +114,14 @@ func NewContainerBuilderConfiguration() (*ContainerBuilderConfiguration, error) 
 	if containerBuilderConfiguration.KanikoImagePullPolicy == "" {
 		containerBuilderConfiguration.KanikoImagePullPolicy = common.GetEnvOrDefaultString(
 			"NUCLIO_KANIKO_CONTAINER_IMAGE_PULL_POLICY", "IfNotPresent")
+	}
+	if containerBuilderConfiguration.BuildahImage == "" {
+		containerBuilderConfiguration.BuildahImage = common.GetEnvOrDefaultString("NUCLIO_BUILDAH_CONTAINER_IMAGE",
+			"quay.io/buildah/stable")
+	}
+	if containerBuilderConfiguration.BuildahImagePullPolicy == "" {
+		containerBuilderConfiguration.BuildahImagePullPolicy = common.GetEnvOrDefaultString(
+			"NUCLIO_BUILDAH_CONTAINER_IMAGE_PULL_POLICY", "IfNotPresent")
 	}
 	if containerBuilderConfiguration.JobPrefix == "" {
 		containerBuilderConfiguration.JobPrefix = common.GetEnvOrDefaultString("NUCLIO_DASHBOARD_JOB_NAME_PREFIX",
