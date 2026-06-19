@@ -30,7 +30,7 @@ A web UI and REST API server (written in Go, fronted by a React SPA) that lets u
 The command-line interface for nuclio. Wraps the same API as the Dashboard. Used for scripted and CI/CD deployments.
 
 ### Function CR (Custom Resource)
-A Kubernetes Custom Resource (`Function`) that describes the desired state of a deployed function — its source code, runtime, resource limits, triggers, and configuration. Stored in the Kubernetes API server datastore.
+A Kubernetes Custom Resource (`Function`) that describes the desired state of a deployed function — its source code, runtime, resource limits, triggers, and configuration. Stored via the Kubernetes API server.
 
 ### Controller
 A Kubernetes controller that watches Function Custom Resources and reconciles actual cluster state (Deployments, Services, ConfigMaps, Ingresses) to match the desired spec. Written in Go using the `controller-runtime` framework.
@@ -50,7 +50,7 @@ User / CI
   ├─► Dashboard (REST API)  ──┐
   └─► nuctl (CLI)            │
                               ▼
-                       Function CR  (Kubernetes datastore)
+                       Function CR  (Kubernetes API server)
                               │
                               ▼
                         Controller  (reconciles)
