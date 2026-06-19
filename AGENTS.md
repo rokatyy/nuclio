@@ -1,6 +1,6 @@
 # AGENTS.md — Orientation Guide for AI Coding Agents
 
-This file is the primary orientation document for AI coding agents (Codex, Claude, Demerzel, etc.) working in the **rokatyy fork of the nuclio repository**. Read this file before taking any action in the repo.
+This file is the primary orientation document for AI coding agents working in this fork of the nuclio repository. Read this file before taking any action in the repo.
 
 ---
 
@@ -30,10 +30,10 @@ A web UI and REST API server (written in Go, fronted by a React SPA) that lets u
 The command-line interface for nuclio. Wraps the same API as the Dashboard. Used for scripted and CI/CD deployments.
 
 ### Function CR (Custom Resource)
-A Kubernetes Custom Resource (`Function`) that describes the desired state of a deployed function — its source code, runtime, resource limits, triggers, and configuration. Stored in etcd via the Kubernetes API server.
+A Kubernetes Custom Resource (`Function`) that describes the desired state of a deployed function — its source code, runtime, resource limits, triggers, and configuration. Stored in the Kubernetes API server datastore.
 
 ### Controller
-A Kubernetes controller that watches Function CRs and reconciles actual cluster state (Deployments, Services, ConfigMaps, Ingresses) to match the desired spec. Written in Go using the `controller-runtime` framework.
+A Kubernetes controller that watches Function Custom Resources and reconciles actual cluster state (Deployments, Services, ConfigMaps, Ingresses) to match the desired spec. Written in Go using the `controller-runtime` framework.
 
 ### Processor
 The per-function runtime binary that is embedded inside each function's container image. The Processor:
@@ -50,7 +50,7 @@ User / CI
   ├─► Dashboard (REST API)  ──┐
   └─► nuctl (CLI)            │
                               ▼
-                       Function CR  (Kubernetes etcd)
+                       Function CR  (Kubernetes datastore)
                               │
                               ▼
                         Controller  (reconciles)
@@ -73,11 +73,11 @@ Use these stable URLs for authoritative reference. Do not rely on branch-specifi
 
 | Topic | URL |
 |---|---|
-| Getting started | https://nuclio.io/docs/latest/setup/ |
-| Function concepts | https://nuclio.io/docs/latest/concepts/ |
-| Triggers reference | https://nuclio.io/docs/latest/reference/triggers/ |
-| Deployment (Kubernetes) | https://nuclio.io/docs/latest/setup/k8s/ |
-| CLI reference (nuctl) | https://nuclio.io/docs/latest/reference/nuctl/ |
+| Getting started | https://docs.nuclio.io/en/stable/setup/ |
+| Function concepts | https://docs.nuclio.io/en/stable/concepts/ |
+| Triggers reference | https://docs.nuclio.io/en/stable/reference/triggers/ |
+| Deployment (Kubernetes) | https://docs.nuclio.io/en/stable/setup/k8s/ |
+| CLI reference (nuctl) | https://docs.nuclio.io/en/stable/reference/nuctl/ |
 | Official GitHub (upstream) | https://github.com/nuclio/nuclio |
 
 For in-repo documentation see the `docs/` directory.
