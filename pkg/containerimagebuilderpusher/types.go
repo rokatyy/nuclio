@@ -82,6 +82,16 @@ type ContainerBuilderConfiguration struct {
 	InsecurePullRegistry                 bool
 	PushImagesRetries                    int
 	ImageFSExtractionRetries             int
+
+	// Buildah-specific fields
+	BuildahImage              string
+	BuildahImagePullPolicy    string
+	BuildahStorageDriver      string
+	BuildahIsolation          string
+	BuildahPrivileged         bool
+	BuildahJobPrefix          string
+	BuildahJobDeletionTimeout time.Duration
+	BuildahPushImagesRetries  int
 }
 
 func NewContainerBuilderConfiguration() (*ContainerBuilderConfiguration, error) {
@@ -162,6 +172,39 @@ func NewContainerBuilderConfiguration() (*ContainerBuilderConfiguration, error) 
 
 	containerBuilderConfiguration.DefaultServiceAccount = common.GetEnvOrDefaultString("NUCLIO_KANIKO_DEFAULT_SERVICE_ACCOUNT",
 		"")
+
+	if containerBuilderConfiguration.BuildahImage == "" {
+		containerBuilderConfiguration.BuildahImage = common.GetEnvOrDefaultString(
+			"NUCLIO_BUILDAH_CONTAINER_IMAGE", "quay.io/buildah/stable:latest")
+	}
+	if containerBuilderConfiguration.BuildahImagePullPolicy == "" {
+		containerBuilderConfiguration.BuildahImagePullPolicy = common.GetEnvOrDefaultString(
+			"NUCLIO_BUILDAH_CONTAINER_IMAGE_PULL_POLICY", "IfNotPresent")
+	}
+	if containerBuilderConfiguration.BuildahStorageDriver == "" {
+		containerBuilderConfiguration.BuildahStorageDriver = common.GetEnvOrDefaultString(
+			"NUCLIO_BUILDAH_STORAGE_DRIVER", "overlay")
+	}
+	if containerBuilderConfiguration.BuildahIsolation == "" {
+		containerBuilderConfiguration.BuildahIsolation = common.GetEnvOrDefaultString(
+			"NUCLIO_BUILDAH_ISOLATION", "chroot")
+	}
+	containerBuilderConfiguration.BuildahPrivileged =
+		common.GetEnvOrDefaultBool("NUCLIO_BUILDAH_PRIVILEGED", false)
+	if containerBuilderConfiguration.BuildahJobPrefix == "" {
+		containerBuilderConfiguration.BuildahJobPrefix = common.GetEnvOrDefaultString(
+			"NUCLIO_BUILDAH_JOB_NAME_PREFIX", "buildahjob")
+	}
+	containerBuilderConfiguration.BuildahPushImagesRetries, err =
+		strconv.Atoi(common.GetEnvOrDefaultString("NUCLIO_BUILDAH_PUSH_IMAGES_RETRIES", "3"))
+	if err != nil {
+		return nil, errors.Wrap(err, "Failed to resolve Buildah push retries")
+	}
+	buildahJobDeletionTimeout := common.GetEnvOrDefaultString("NUCLIO_BUILDAH_JOB_DELETION_TIMEOUT", "30m")
+	containerBuilderConfiguration.BuildahJobDeletionTimeout, err = time.ParseDuration(buildahJobDeletionTimeout)
+	if err != nil {
+		return nil, errors.Wrap(err, "Failed to parse Buildah job deletion timeout")
+	}
 
 	return &containerBuilderConfiguration, nil
 }
