@@ -47,6 +47,10 @@ const NuclioLabelKeyComponent = "nuclio.io/component"
 const NuclioLabelKeyFunctionCronTriggerName = "nuclio.io/function-cron-trigger-name"
 const NuclioLabelKeyFunctionCronJobPod = "nuclio.io/function-cron-job-pod"
 
+// Nuclio Annotations
+
+const NuclioAnnotationKeyVersion = "nuclio.io/version"
+
 // KubernetesDomainLevelMaxLength DNS domain level limitation is 63 chars
 // https://en.wikipedia.org/wiki/Subdomain#Overview
 const KubernetesDomainLevelMaxLength = 63
@@ -68,3 +72,17 @@ const FunctionTagLatest = "latest"
 const FunctionContainerName = "nuclio"
 
 const AnnotationKubectlDefaultContainer = "kubectl.kubernetes.io/default-container"
+
+// Runtime identifiers
+const (
+	RuntimeShell      = "shell"
+	RuntimeGolang     = "golang"
+	RuntimePython     = "python"
+	RuntimePython310  = "python:3.10"
+	RuntimePython311  = "python:3.11"
+	RuntimePython312  = "python:3.12"
+	RuntimeNodejs     = "nodejs"
+	RuntimeJava       = "java"
+	RuntimeRuby       = "ruby"
+	RuntimeDotnetcore = "dotnetcore"
+)

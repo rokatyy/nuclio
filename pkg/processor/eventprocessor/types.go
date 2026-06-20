@@ -31,7 +31,8 @@ import (
 	"github.com/nuclio/nuclio-sdk-go"
 )
 
-var ErrNoAvailableObjects = errors.New("No available objects")
+var ErrNoAvailableObjectsImmediately = errors.New("No available objects, function configured not to wait. Failed immediately")
+var ErrNoAvailableObjectsTimeout = errors.New("No available objects in the given timeout")
 var ErrAllObjectsAreTerminated = errors.New("All objects are terminated")
 
 type Allocator interface {
@@ -127,11 +128,9 @@ type EventProcessor interface {
 	// SupportsRestart checks if the event processor supports restarting
 	SupportsRestart() bool
 
-	// Subscribe registers a channel to receive control messages of a specific kind
-	Subscribe(kind controlcommunication.ControlMessageKind, channel chan *controlcommunication.ControlMessage) error
-
-	// Unsubscribe removes a previously registered channel for control messages
-	Unsubscribe(kind controlcommunication.ControlMessageKind, channel chan *controlcommunication.ControlMessage) error
+	// Subscribe creates a control-message subscription owned by this processor's
+	// broker. The caller must Close() the returned Subscription to release it.
+	Subscribe(kind controlcommunication.ControlMessageKind) (controlcommunication.Subscription, error)
 
 	// WaitForStart blocks until the event processor has fully started
 	WaitForStart(timeout time.Duration) (err error)

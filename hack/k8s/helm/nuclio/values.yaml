@@ -19,12 +19,27 @@
 # if true, all components assume no internet connectivity
 offline: false
 
+# Extra labels to apply to all resources created by this chart.
+# If a key collides with a chart-generated label, the user-supplied value wins.
+# Example:
+#   commonLabels:
+#     app.kubernetes.io/instance: nuclio
+#     my-org/team: platform
+commonLabels: {}
+
+# shared image pull secrets for Nuclio service deployments (dashboard/controller/dlx/autoscaler)
+# chart-local fallback (prefer global.imagePullSecrets, especially when used as a subchart)
+# imagePullSecrets:
+#   - name: my-registry-secret
+imagePullSecrets: []
+
+
 # Controller settings
 controller:
   enabled: true
   image:
     repository: quay.io/nuclio/controller
-    tag: 1.15.3-amd64
+    tag: 1.17.0-amd64
     pullPolicy: IfNotPresent
   resources: {}
 
@@ -57,6 +72,12 @@ controller:
   ## Pod Priority
   ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/#pod-priority
   priorityClassName: ""
+
+  # Additional labels added to the controller pod template.metadata.labels.
+  # Merged with the chart's selectorLabels; values here take precedence.
+  # Example use: { "azure.workload.identity/use": "true" } to activate
+  # Azure Workload Identity token injection on AKS.
+  podLabels: {}
 
   # Uncomment to have the controller to listen only the namespace's events,
   # change to listen on other specific namespace
@@ -95,9 +116,10 @@ controller:
 dashboard:
   enabled: true
   replicas: 1
+  servicePort: 8070
   image:
     repository: quay.io/nuclio/dashboard
-    tag: 1.15.3-amd64
+    tag: 1.17.0-amd64
     pullPolicy: IfNotPresent
   resources: {}
 
@@ -125,6 +147,12 @@ dashboard:
   ## Pod Priority
   ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/#pod-priority
   priorityClassName: ""
+
+  # Additional labels added to the dashboard pod template.metadata.labels.
+  # Merged with the chart's selectorLabels; values here take precedence.
+  # Example use: { "azure.workload.identity/use": "true" } to activate
+  # Azure Workload Identity token injection on AKS.
+  podLabels: {}
 
   baseImagePullPolicy: IfNotPresent
   externalIPAddresses: []
@@ -179,6 +207,19 @@ dashboard:
     # the default service account to use for kaniko pod, if not specified otherwise
     defaultServiceAccount: ""
 
+    # Additional labels added to the kaniko build pod template.metadata.labels.
+    # The dashboard passes these through to the kaniko Job it creates at
+    # runtime (so they can't be set on the chart-rendered manifests).
+    # Example use: { "azure.workload.identity/use": "true" } to activate
+    # Azure Workload Identity token injection for ACR push on AKS.
+    #
+    # Note: if `registry.secretName` / `registry.credentials` is also set,
+    # the resulting docker-config secret is mounted at /kaniko/.docker
+    # and takes precedence over any federated token a workload identity
+    # would provide. See "Using Kaniko with cloud workload identity" in
+    # docs/setup/k8s/running-in-production-k8s.md.
+    podLabels: {}
+
   # use to configure node port
   nodePort:
 
@@ -203,6 +244,15 @@ dashboard:
     #      - nuclio.local
     ingressClassName: ""
 
+  # if enabled, create an HTTPRoute to route traffic from a Gateway to the dashboard service
+  httpRoute:
+    enabled: false
+    hosts:
+      - nuclio.local
+    # When gateway.enabled is false, reference here an existing Gateway
+    parentRefs: []
+    #   - name: my-gateway
+
   authConfig:
 
     # "nop", "iguazio" or "iguazio-v4"
@@ -224,6 +274,8 @@ dashboard:
 
       # invalidate a cache entry after specific timeout
       cacheExpirationTimeout: 60s
+
+      verificationMethod: "POST"
 
   opa:
     enabled: false
@@ -254,9 +306,12 @@ dashboard:
     logLevel: info
     logFormat: json
 
+    extraArgs:
+      - "--skip-version-check"
+
     image:
       repository: openpolicyagent/opa
-      tag: 0.30.1
+      tag: 1.17.0
       pullPolicy: IfNotPresent
       pullSecrets: []
     resources: {}
@@ -302,9 +357,15 @@ autoscaler:
   replicas: 1
   image:
     repository: quay.io/nuclio/autoscaler
-    tag: 1.15.3-amd64
+    tag: 1.17.0-amd64
     pullPolicy: IfNotPresent
   resources: {}
+
+  # Additional labels added to the autoscaler pod template.metadata.labels.
+  # Merged with the chart's selectorLabels; values here take precedence.
+  # Example use: { "azure.workload.identity/use": "true" } to activate
+  # Azure Workload Identity token injection on AKS.
+  podLabels: {}
 
   ## Node labels for pod assignment
   ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
@@ -336,9 +397,15 @@ dlx:
   replicas: 1
   image:
     repository: quay.io/nuclio/dlx
-    tag: 1.15.3-amd64
+    tag: 1.17.0-amd64
     pullPolicy: IfNotPresent
   resources: {}
+
+  # Additional labels added to the dlx pod template.metadata.labels.
+  # Merged with the chart's selectorLabels; values here take precedence.
+  # Example use: { "azure.workload.identity/use": "true" } to activate
+  # Azure Workload Identity token injection on AKS.
+  podLabels: {}
 
   ## Node labels for pod assignment
   ## Ref: https://kubernetes.io/docs/user-guide/node-selection/
@@ -444,6 +511,13 @@ rbac:
   # If true, creates the necessary roles and role bindings for nuclio's service account
   create: true
 
+  # If true (and rbac.create is true), creates the service account used by nuclio's
+  # components. Set to false when the service account is managed externally (e.g. to
+  # attach workload identity annotations) but the chart should still create the
+  # roles and role bindings that bind to it. When false, set `rbac.serviceAccountName`
+  # to the name of the existing service account.
+  createServiceAccount: true
+
   # serviceAccountName: service-account-name
 
   # Allow / deny cluster-wide resource access. values: "cluster", "namespaced".
@@ -491,7 +565,9 @@ platform: {}
 #    defaultHTTPIngressHostTemplate: ""
 #    projectSecretTemplate: ""
 #    projectSecretAllowedServiceAccountsKey: ""
+#    projectSecretForbiddenServiceAccountsKey: ""
 #    projectSecretDefaultServiceAccountKey: ""
+#    defaultForbiddenServiceAccounts: []
 #    defaultHTTPIngressAnnotations:
 #      ingressAnnotationKey: ingressAnnotationValue
 #    defaultHTTPIngressClassName: ""
@@ -524,15 +600,53 @@ platform: {}
 #    webapiURL: ""
 #    getStreamShardsConcurrentRequests: 64
 #
+#  # Security: maskSensitiveFields moves trigger credentials (password, secret, nested
+#  # attributes.sasl.password, etc.) out of the NuclioFunction CRD into Kubernetes Secrets
+#  # and replaces them with reference tokens. It is OFF by default. When off, credentials
+#  # are stored verbatim in the CRD and returned in plaintext by the Dashboard API
+#  # (GET /api/functions). Enable for production deployments. See
+#  # docs/setup/k8s/running-in-production-k8s.md#securing-the-dashboard.
 #  sensitiveFields:
 #    maskSensitiveFields: true
+#
+#  serviceAccount:
+#    enabled: false
+#    tokenPath: /var/run/secrets/kubernetes.io/serviceaccount/token
+#    tokenExpirationSeconds: 600
+#    tokenRefreshRatio: 0.75
+#
+# scaleToZero:
+#     scalerInterval: 1m
+#     metricsClient:
+#       kind: prometheusClient
+#       url: http://monitoring-prometheus-server
+#       templates:
+#         - name: "nuclio_processor_handled_events_total"
+#           template: |-
+#             add_here_your_prometheus_query
 
 # global is a stanza that is used if this is used as a subchart. Ignore otherwise
 global:
   externalHostAddress:
+  # image pull secrets shared by Nuclio service deployments (dashboard/controller/dlx/autoscaler)
+  # imagePullSecrets:
+  #   - name: my-registry-secret
+  imagePullSecrets: []
   registry:
     url:
     secretName:
   nuclio:
     dashboard:
       nodePort:
+
+
+gateway:
+  # if enabled, this creates a Gateway to be used by the Dashboard HTTPRoute
+  enabled: false
+  gatewayClassName: traefik
+  listenerPort: 80
+  tls: []
+  #  - secretName: nuclio-tls
+  #    port: 443
+  #    hosts:
+  #      - nuclio.local

@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ import (
 	"github.com/nuclio/nuclio/pkg/processor/build"
 	"github.com/nuclio/nuclio/pkg/processor/build/runtime"
 	"github.com/nuclio/nuclio/pkg/processor/trigger"
+	"github.com/nuclio/nuclio/pkg/processor/trigger/rabbitmq"
 	"github.com/nuclio/nuclio/pkg/processor/util/partitionworker"
 
 	"github.com/distribution/reference"
@@ -655,7 +657,7 @@ func (ap *Platform) FilterProjectsByPermissions(ctx context.Context,
 	resources := make([]string, len(projects))
 	for idx, project := range projects {
 		projectName := project.GetConfig().Meta.Name
-		resources[idx] = opa.GenerateProjectResourceString(projectName, "")
+		resources[idx] = opa.GenerateProjectResourceString(projectName, ap.getOPAResourcesPrefix())
 	}
 
 	allowedList, err := ap.QueryOPAMultipleResources(ctx, resources, opaclient.ActionRead, permissionOptions)
@@ -697,7 +699,7 @@ func (ap *Platform) FilterFunctionsByPermissions(ctx context.Context,
 	for idx, function := range functions {
 		functionName := function.GetConfig().Meta.Name
 		projectName := function.GetConfig().Meta.Labels[common.NuclioResourceLabelKeyProjectName]
-		resources[idx] = opa.GenerateFunctionResourceString(projectName, functionName, "")
+		resources[idx] = opa.GenerateFunctionResourceString(projectName, functionName, ap.getOPAResourcesPrefix())
 	}
 
 	allowedList, err := ap.QueryOPAMultipleResources(ctx, resources, opaclient.ActionRead, permissionOptions)
@@ -742,7 +744,7 @@ func (ap *Platform) FilterFunctionEventsByPermissions(ctx context.Context,
 		resources = append(resources, opa.GenerateFunctionEventResourceString(projectName,
 			functionName,
 			functionEventName,
-			""))
+			ap.getOPAResourcesPrefix()))
 	}
 	allowedList, err := ap.QueryOPAMultipleResources(ctx, resources, opaclient.ActionRead, permissionOptions)
 	if err != nil {
@@ -766,6 +768,45 @@ func (ap *Platform) FilterFunctionEventsByPermissions(ctx context.Context,
 			"functionEventNames", filteredFunctionEventNames)
 	}
 	return permittedFunctionEvents, nil
+}
+
+// FilterAPIGatewaysByPermissions will filter out some API gateways
+func (ap *Platform) FilterAPIGatewaysByPermissions(ctx context.Context,
+	permissionOptions *opaclient.PermissionOptions,
+	apiGateways []platform.APIGateway) ([]platform.APIGateway, error) {
+
+	if len(permissionOptions.MemberIds) == 0 || len(apiGateways) == 0 {
+		return apiGateways, nil
+	}
+
+	resources := make([]string, len(apiGateways))
+	for idx, apiGateway := range apiGateways {
+		projectName := apiGateway.GetConfig().Meta.Labels[common.NuclioResourceLabelKeyProjectName]
+		apiGatewayName := apiGateway.GetConfig().Meta.Name
+		resources[idx] = opa.GenerateAPIGatewayResourceString(projectName, apiGatewayName, ap.getOPAResourcesPrefix())
+	}
+
+	allowedList, err := ap.QueryOPAMultipleResources(ctx, resources, opaclient.ActionRead, permissionOptions)
+	if err != nil {
+		return nil, errors.Wrap(err, "Failed querying OPA for API gateway permissions")
+	}
+
+	var permittedAPIGateways []platform.APIGateway
+	var filteredAPIGatewayNames []string
+	for idx, allowed := range allowedList {
+		if allowed {
+			permittedAPIGateways = append(permittedAPIGateways, apiGateways[idx])
+		} else {
+			filteredAPIGatewayNames = append(filteredAPIGatewayNames, apiGateways[idx].GetConfig().Meta.Name)
+		}
+	}
+
+	if len(filteredAPIGatewayNames) > 0 {
+		ap.Logger.DebugWithCtx(ctx,
+			"Some API gateways were filtered out",
+			"apiGatewayNames", filteredAPIGatewayNames)
+	}
+	return permittedAPIGateways, nil
 }
 
 // CreateFunctionInvocation will invoke a previously deployed function
@@ -1064,6 +1105,11 @@ func (ap *Platform) GetBaseImageRegistry(registry string, runtime runtime.Runtim
 	return ap.ContainerBuilder.GetBaseImageRegistry(registry), nil
 }
 
+// GetBaseImage returns the base image resolved for the runtime (explicit or default)
+func (ap *Platform) GetBaseImage(runtime runtime.Runtime) string {
+	return runtime.GetBaseImageFromMap(ap.Config.RuntimeBaseImages)
+}
+
 // GetOnbuildImageRegistry returns onbuild image registry
 func (ap *Platform) GetOnbuildImageRegistry(registry string, runtime runtime.Runtime) (string, error) {
 	onbuildImagesOverrides := ap.getOnbuildImagesOverrides()
@@ -1246,6 +1292,59 @@ func (ap *Platform) EnsureProjectRead(ctx context.Context,
 	return nil
 }
 
+// OPAPermissionPropagationWindow / OPAPermissionPropagationInterval bound the wait for OPA to
+// reflect permissions granted by a just-created project/policy. The grants are committed at create
+// time, but the OPA permission manifest regenerates asynchronously, so an operation fired within the
+// window can authorize against a manifest that does not yet grant it. CreateProject waits this long
+// for the project-read grant (#3951) and EnsureFunctionCreateAuthorized for the function-create
+// grant; they share one value so the two propagation waits stay consistent.
+const (
+	OPAPermissionPropagationWindow   = 10 * time.Second
+	OPAPermissionPropagationInterval = 1 * time.Second
+)
+
+// EnsureFunctionCreateAuthorized authorizes function creation against OPA, retrying on a deny to
+// absorb the OPA manifest-propagation lag after a freshly-created project: a deploy fired
+// within ~1s of project creation can authorize against a manifest that does not yet grant
+// function-create. It re-queries until OPA grants the create or the window expires; on expiry it
+// surfaces OPA's own last error — the canonical Forbidden (403) on a genuine denial, or the
+// underlying error on a persistent OPA failure — rather than the retry primitive's generic timeout.
+// The happy path (already allowed) issues a single query and adds no latency; retry only fires on a
+// denial. Like the EnsureProjectRead wait CreateProject performs, the polling is not ctx-cancellable
+// between attempts.
+func (ap *Platform) EnsureFunctionCreateAuthorized(ctx context.Context,
+	projectName string,
+	functionName string,
+	permissionOptions *opaclient.PermissionOptions) error {
+
+	authzOptions := *permissionOptions
+	authzOptions.RaiseForbidden = true
+
+	var lastErr error
+	if err := common.RetryUntilSuccessful(OPAPermissionPropagationWindow,
+		OPAPermissionPropagationInterval,
+		func() bool {
+			_, lastErr = ap.QueryOPAFunctionPermissions(ctx,
+				projectName,
+				functionName,
+				opaclient.ActionCreate,
+				&authzOptions)
+			return lastErr == nil
+		}); err != nil {
+
+		// Window exhausted while OPA kept denying (or erroring). lastErr is the typed error from the
+		// final attempt — the canonical 403 on a genuine denial — which the caller surfaces in
+		// preference to the retry primitive's generic "timed out" error. Fall back to that timeout
+		// error if lastErr is somehow nil: this is an authorization gate, so an exhausted window must
+		// fail closed and never return nil (which would read as authorized).
+		if lastErr == nil {
+			lastErr = err
+		}
+		return lastErr
+	}
+	return nil
+}
+
 func (ap *Platform) QueryOPAProjectPermissions(ctx context.Context,
 	projectName string,
 	action opaclient.Action,
@@ -1310,11 +1409,36 @@ func (ap *Platform) QueryOPAFunctionEventPermissions(ctx context.Context,
 		permissionOptions)
 }
 
+func (ap *Platform) QueryOPAAPIGatewayPermissions(ctx context.Context,
+	projectName,
+	apiGatewayName string,
+	action opaclient.Action,
+	permissionOptions *opaclient.PermissionOptions) (bool, error) {
+	if projectName == "" {
+		projectName = "*"
+	}
+	if apiGatewayName == "" {
+		apiGatewayName = "*"
+	}
+	return ap.queryOPAPermissions(ctx,
+		opa.GenerateAPIGatewayResourceString(projectName, apiGatewayName, ap.getOPAResourcesPrefix()),
+		action,
+		permissionOptions)
+}
+
 func (ap *Platform) QueryOPAMultipleResources(ctx context.Context,
 	resources []string,
 	action opaclient.Action,
 	permissionOptions *opaclient.PermissionOptions) ([]bool, error) {
 	return ap.queryOPAPermissionsMultiResources(ctx, resources, action, permissionOptions)
+}
+
+func (ap *Platform) IsAuthKindIguazioV4() bool {
+	return ap.IsAuthKind(auth.KindIguazioV4)
+}
+
+func (ap *Platform) IsAuthKind(kind auth.Kind) bool {
+	return ap.Config.Opa.AuthKind == kind
 }
 
 func (ap *Platform) functionBuildRequired(functionConfig *functionconfig.Config) (bool, error) {
@@ -1600,12 +1724,18 @@ func (ap *Platform) validateProjectExists(ctx context.Context, functionConfig *f
 }
 
 func (ap *Platform) validateTriggers(functionConfig *functionconfig.Config) error {
-	var httpTriggerExists bool
+
+	// do not allow empty triggers
+	if len(functionConfig.Spec.Triggers) == 0 {
+		return nuclio.NewErrBadRequest("Function must have at least one trigger")
+	}
 
 	// validate ingresses structure correctness
 	if err := ap.validateIngresses(functionConfig.Spec.Triggers); err != nil {
 		return errors.Wrap(err, "Ingresses validation failed")
 	}
+
+	var httpTriggerExists bool
 
 	for triggerKey, triggerInstance := range functionConfig.Spec.Triggers {
 
@@ -1630,11 +1760,13 @@ func (ap *Platform) validateTriggers(functionConfig *functionconfig.Config) erro
 
 		// no more than one http trigger is allowed
 		if triggerInstance.Kind == "http" {
-			if !httpTriggerExists {
-				httpTriggerExists = true
-				continue
+			if httpTriggerExists {
+				return nuclio.NewErrBadRequest("There's more than one http trigger (unsupported)")
 			}
-			return nuclio.NewErrBadRequest("There's more than one http trigger (unsupported)")
+			httpTriggerExists = true
+			if err := ap.validateStreamingFlushPeriod(triggerKey, &triggerInstance); err != nil {
+				return nuclio.WrapErrBadRequest(err)
+			}
 		}
 
 		// explicit ack is only allowed for Static Allocation mode
@@ -1685,6 +1817,34 @@ func (ap *Platform) validateTriggers(functionConfig *functionconfig.Config) erro
 		}
 	}
 
+	return nil
+}
+
+// validateStreamingFlushPeriod validates the HTTP trigger's streamingFlushPeriod attribute.
+// When set, it must be a non-empty string that parses as a positive Go duration (e.g. "1s", "500ms").
+// Invalid or non-positive values cause validation to fail so deploy fails early instead of at stream time.
+func (ap *Platform) validateStreamingFlushPeriod(triggerKey string, triggerInstance *functionconfig.Trigger) error {
+	if triggerInstance.Attributes == nil {
+		return nil
+	}
+	attrValue, exists := triggerInstance.Attributes["streamingFlushPeriod"]
+	if !exists || attrValue == nil {
+		return nil
+	}
+	periodStr, ok := attrValue.(string)
+	if !ok {
+		return errors.Errorf("Invalid streamingFlushPeriod. Must be a string, got %T", attrValue)
+	}
+	if periodStr == "" {
+		return nil
+	}
+	flushPeriod, err := time.ParseDuration(periodStr)
+	if err != nil {
+		return errors.Wrapf(err, "Invalid streamingFlushPeriod %q", periodStr)
+	}
+	if flushPeriod <= 0 {
+		return errors.Errorf("Invalid streamingFlushPeriod. Must be positive, got %q", periodStr)
+	}
 	return nil
 }
 
@@ -1744,6 +1904,9 @@ func (ap *Platform) validateProcessingMode(triggerInstance functionconfig.Trigge
 		))
 	}
 	if _, err := triggerInstance.AsyncConfig.GetConnectionAvailabilityTimeoutDuration(); err != nil {
+		return nuclio.WrapErrBadRequest(err)
+	}
+	if _, err := triggerInstance.AsyncConfig.GetEstablishConnectionTimeoutDuration(); err != nil {
 		return nuclio.WrapErrBadRequest(err)
 	}
 
@@ -1831,8 +1994,78 @@ func (ap *Platform) enrichTriggers(ctx context.Context, functionConfig *function
 		if err := ap.enrichProcessingMode(ctx, triggerName, &triggerInstance, functionConfig); err != nil {
 			return errors.Wrap(err, "Failed to enrich processing mode")
 		}
+		if triggerInstance.Kind == "http" {
+			ap.enrichHTTPTriggerStreamingFlushPeriod(ctx, triggerName, &triggerInstance, functionConfig)
+		}
+		if triggerInstance.Kind == "rabbit-mq" {
+			if err := ap.enrichRabbitMQTrigger(ctx, triggerName, &triggerInstance); err != nil {
+				return errors.Wrap(err, "Failed to enrich RabbitMQ trigger")
+			}
+		}
 
 		functionConfig.Spec.Triggers[triggerName] = triggerInstance
+	}
+
+	return nil
+}
+
+func (ap *Platform) enrichHTTPTriggerStreamingFlushPeriod(ctx context.Context, triggerName string, triggerInstance *functionconfig.Trigger, functionConfig *functionconfig.Config) {
+	if triggerInstance.Attributes == nil {
+		triggerInstance.Attributes = make(map[string]interface{})
+	}
+	if _, ok := triggerInstance.Attributes["streamingFlushPeriod"]; !ok || triggerInstance.Attributes["streamingFlushPeriod"] == "" {
+		ap.Logger.DebugWithCtx(ctx,
+			"Enriching streaming flush period for HTTP trigger",
+			"functionName", functionConfig.Meta.Name,
+			"trigger", triggerName,
+			"streamingFlushPeriod", functionconfig.DefaultStreamingFlushPeriod)
+		triggerInstance.Attributes["streamingFlushPeriod"] = functionconfig.DefaultStreamingFlushPeriod
+	}
+}
+
+func (ap *Platform) enrichRabbitMQTrigger(ctx context.Context, triggerName string, triggerInstance *functionconfig.Trigger) error {
+	// Parse the broker URL
+	parsedURL, err := url.Parse(triggerInstance.URL)
+	if err != nil {
+		return errors.Wrap(err, "Failed to parse RabbitMQ URL")
+	}
+
+	// Extract credentials if present
+	if parsedURL.User != nil {
+		if user := parsedURL.User.Username(); user != "" {
+			triggerInstance.Username = user
+		}
+
+		if pass, found := parsedURL.User.Password(); found {
+			triggerInstance.Password = pass
+		}
+
+		// Remove credentials from URL for security reasons
+		parsedURL.User = nil
+
+		triggerInstance.URL = parsedURL.String()
+
+		ap.Logger.DebugWithCtx(ctx,
+			"Extracted RabbitMQ credentials from URL",
+			"trigger", triggerName,
+			"brokerUrl", triggerInstance.URL,
+			"isUsernameSet", triggerInstance.Username != "",
+			"passwordSet", triggerInstance.Password != "",
+		)
+	}
+
+	return ap.enrichRabbitMQAckConfig(triggerInstance)
+}
+
+func (ap *Platform) enrichRabbitMQAckConfig(triggerInstance *functionconfig.Trigger) error {
+	if triggerInstance.Attributes == nil {
+		triggerInstance.Attributes = make(map[string]interface{})
+	}
+	if _, ok := triggerInstance.Attributes["onError"]; !ok {
+		triggerInstance.Attributes["onError"] = rabbitmq.OnProcessErrorNack
+	}
+	if _, ok := triggerInstance.Attributes["requeueOnError"]; !ok {
+		triggerInstance.Attributes["requeueOnError"] = false
 	}
 
 	return nil
@@ -1978,6 +2211,25 @@ func (ap *Platform) enrichProcessingMode(
 		triggerInstance.AsyncConfig.ConnectionAvailabilityTimeout = functionconfig.DefaultConnectionAvailabilityTimeout
 	}
 
+	// EstablishConnectionTimeout governs how long the processor will wait for the wrapper to
+	// accept TCP connections after start.  It must accommodate a slow init_context, so the
+	// default scales with the function's readiness window (3× ReadinessTimeoutSeconds).  Falls
+	// back to the platform default when ReadinessTimeoutSeconds has not been enriched yet.
+	if triggerInstance.AsyncConfig.EstablishConnectionTimeout == "" {
+		readinessTimeout := time.Duration(functionConfig.Spec.ReadinessTimeoutSeconds) * time.Second
+		if readinessTimeout <= 0 {
+			readinessTimeout = ap.Config.GetDefaultFunctionReadinessTimeout()
+		}
+		establishConnectionTimeout := functionconfig.DefaultEstablishConnectionTimeoutMultiplier * readinessTimeout
+		ap.Logger.DebugWithCtx(ctx,
+			"Enriching EstablishConnectionTimeout for function trigger",
+			"functionName", functionConfig.Meta.Name,
+			"trigger", triggerName,
+			"establishConnectionTimeout", establishConnectionTimeout.String(),
+		)
+		triggerInstance.AsyncConfig.EstablishConnectionTimeout = establishConnectionTimeout.String()
+	}
+
 	return nil
 }
 
@@ -2063,14 +2315,14 @@ func (ap *Platform) queryOPAPermissions(ctx context.Context,
 }
 
 func (ap *Platform) getOPAResourcesPrefix() string {
-	if ap.Config.Opa.AuthKind == auth.KindIguazioV4 {
+	if ap.IsAuthKindIguazioV4() {
 		return opa.IguazioV4ResourcePrefix
 	}
 	return ""
 }
 
 func (ap *Platform) getOPAManagementPrefix() string { // nolint: unused
-	if ap.Config.Opa.AuthKind == auth.KindIguazioV4 {
+	if ap.IsAuthKindIguazioV4() {
 		return opa.IguazioV4ManagementPrefix
 	}
 	return ""

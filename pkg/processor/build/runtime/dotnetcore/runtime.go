@@ -33,7 +33,11 @@ func (d *dotnetcore) GetName() string {
 }
 
 // GetProcessorDockerfileInfo returns information required to build the processor Dockerfile
-func (d *dotnetcore) GetProcessorDockerfileInfo(runtimeConfig *runtimeconfig.Config, onbuildImageRegistry string) (*runtime.ProcessorDockerfileInfo, error) {
+func (d *dotnetcore) GetProcessorDockerfileInfo(
+	_ *runtimeconfig.Config,
+	onbuildImageRegistry string,
+	baseImage string,
+) (*runtime.ProcessorDockerfileInfo, error) {
 
 	processorDockerfileInfo := runtime.ProcessorDockerfileInfo{}
 
@@ -50,10 +54,21 @@ func (d *dotnetcore) GetProcessorDockerfileInfo(runtimeConfig *runtimeconfig.Con
 			"/home/nuclio/bin/handler":               "/opt/nuclio/handler",
 			"/home/nuclio/src/nuclio-sdk-dotnetcore": "/opt/nuclio/nuclio-sdk-dotnetcore",
 		},
+		StageCommands: d.getHandlerBuildStageCommands(),
 	}
 	processorDockerfileInfo.OnbuildArtifacts = []runtime.Artifact{artifact}
 
-	// set the default base image
-	processorDockerfileInfo.BaseImage = "gcr.io/iguazio/dotnet/runtime:9.0"
+	processorDockerfileInfo.BaseImage = baseImage
 	return &processorDockerfileInfo, nil
+}
+
+func (d *dotnetcore) getHandlerBuildStageCommands() string {
+	return `ARG NUCLIO_BUILD_LOCAL_HANDLER_DIR=.
+COPY ${NUCLIO_BUILD_LOCAL_HANDLER_DIR} /home/nuclio/src/handler
+RUN dotnet add /home/nuclio/src/handler package Microsoft.CSharp && \
+    dotnet add /home/nuclio/src/handler package System.Dynamic.Runtime && \
+    dotnet add /home/nuclio/src/handler package Newtonsoft.Json && \
+    dotnet add /home/nuclio/src/handler package Microsoft.Azure.EventHubs -v 2.2.1 && \
+    dotnet add /home/nuclio/src/handler reference /home/nuclio/src/nuclio-sdk-dotnetcore/nuclio-sdk-dotnetcore.csproj
+RUN cd /home/nuclio/src/handler && dotnet restore && dotnet publish -c Release -o /home/nuclio/bin/handler`
 }

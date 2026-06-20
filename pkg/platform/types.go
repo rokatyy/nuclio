@@ -312,20 +312,36 @@ func (pc *ProjectConfig) Scrub() {
 }
 
 type CreateProjectOptions struct {
-	ProjectConfig           *ProjectConfig
-	RequestOrigin           platformconfig.ProjectsLeaderKind
-	SessionCookie           *http.Cookie
-	PermissionOptions       opaclient.PermissionOptions
-	AuthSession             auth.Session
-	WaitForCreateCompletion bool
+	ProjectConfig                *ProjectConfig
+	RequestOrigin                platformconfig.ProjectsLeaderKind
+	SessionCookie                *http.Cookie
+	PermissionOptions            opaclient.PermissionOptions
+	AuthSession                  auth.Session
+	ServiceAccountAuthentication bool
+	WaitForCreateCompletion      bool
+
+	// SkipLeaderEvaluation, set from the x-mlrun-force-sync header, instructs the external
+	// client to skip 2PC leader evaluation (sync-status / op_id validation and current-op-id
+	// CAS) and apply the write directly. Only honored on leader-origin requests; ignored
+	// for non-leader callers (otherwise the header would bypass leader forwarding entirely).
+	// See headers.MLRunForceSync.
+	SkipLeaderEvaluation bool
 }
 
 type UpdateProjectOptions struct {
-	ProjectConfig     ProjectConfig
-	RequestOrigin     platformconfig.ProjectsLeaderKind
-	SessionCookie     *http.Cookie
-	PermissionOptions opaclient.PermissionOptions
-	AuthSession       auth.Session
+	ProjectConfig                ProjectConfig
+	RequestOrigin                platformconfig.ProjectsLeaderKind
+	SessionCookie                *http.Cookie
+	PermissionOptions            opaclient.PermissionOptions
+	AuthSession                  auth.Session
+	ServiceAccountAuthentication bool
+
+	// SkipLeaderEvaluation, set from the x-mlrun-force-sync header, instructs the external
+	// client to skip 2PC leader evaluation (sync-status / op_id validation and current-op-id
+	// CAS) and apply the write directly. Only honored on leader-origin requests; ignored
+	// for non-leader callers (otherwise the header would bypass leader forwarding entirely).
+	// See headers.MLRunForceSync.
+	SkipLeaderEvaluation bool
 }
 
 type DeleteProjectStrategy string
@@ -354,12 +370,20 @@ func ResolveProjectDeletionStrategyOrDefault(projectDeletionStrategy string) Del
 }
 
 type DeleteProjectOptions struct {
-	Meta              ProjectMeta
-	Strategy          DeleteProjectStrategy
-	RequestOrigin     platformconfig.ProjectsLeaderKind
-	SessionCookie     *http.Cookie
-	PermissionOptions opaclient.PermissionOptions
-	AuthSession       auth.Session
+	Meta                         ProjectMeta
+	Strategy                     DeleteProjectStrategy
+	RequestOrigin                platformconfig.ProjectsLeaderKind
+	SessionCookie                *http.Cookie
+	PermissionOptions            opaclient.PermissionOptions
+	AuthSession                  auth.Session
+	ServiceAccountAuthentication bool
+
+	// SkipLeaderEvaluation, set from the x-mlrun-force-sync header, instructs the external
+	// client to skip 2PC leader evaluation (sync-status / op_id validation and current-op-id
+	// CAS) and apply the write directly. Only honored on leader-origin requests; ignored
+	// for non-leader callers (otherwise the header would bypass leader forwarding entirely).
+	// See headers.MLRunForceSync.
+	SkipLeaderEvaluation bool
 
 	// allowing us to "block" until related resources are removed.
 	// used in testings
@@ -368,11 +392,12 @@ type DeleteProjectOptions struct {
 }
 
 type GetProjectsOptions struct {
-	Meta              ProjectMeta
-	PermissionOptions opaclient.PermissionOptions
-	RequestOrigin     platformconfig.ProjectsLeaderKind
-	SessionCookie     *http.Cookie
-	AuthSession       auth.Session
+	Meta                         ProjectMeta
+	PermissionOptions            opaclient.PermissionOptions
+	RequestOrigin                platformconfig.ProjectsLeaderKind
+	SessionCookie                *http.Cookie
+	AuthSession                  auth.Session
+	ServiceAccountAuthentication bool
 }
 
 // DeepCopyInto to appease k8s
@@ -553,26 +578,30 @@ type APIGatewayStatus struct {
 type CreateAPIGatewayOptions struct {
 	APIGatewayConfig           *APIGatewayConfig
 	AuthSession                auth.Session
+	PermissionOptions          opaclient.PermissionOptions
 	ValidateFunctionsExistence bool
 }
 
 type UpdateAPIGatewayOptions struct {
 	APIGatewayConfig           *APIGatewayConfig
 	AuthSession                auth.Session
+	PermissionOptions          opaclient.PermissionOptions
 	ValidateFunctionsExistence bool
 }
 
 type DeleteAPIGatewayOptions struct {
-	Meta        APIGatewayMeta
-	AuthSession auth.Session
+	Meta              APIGatewayMeta
+	AuthSession       auth.Session
+	PermissionOptions opaclient.PermissionOptions
 }
 
 type GetAPIGatewaysOptions struct {
-	Name         string
-	Namespace    string
-	Labels       string
-	FunctionName string
-	AuthSession  auth.Session
+	Name              string
+	Namespace         string
+	Labels            string
+	FunctionName      string
+	AuthSession       auth.Session
+	PermissionOptions opaclient.PermissionOptions
 }
 
 // DeepCopyInto to appease k8s

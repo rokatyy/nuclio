@@ -87,6 +87,39 @@ func SanitizePath(path string) (string, error) {
 	return absPath, nil
 }
 
+// ContainsPathTraversal reports whether the given path contains a directory-traversal
+// sequence ("..") and therefore must not be trusted for filesystem access. Note that
+// stripping "../" is not a safe alternative, since inputs such as "....//" would still
+// resolve to "../"; reject the input outright instead.
+func ContainsPathTraversal(path string) bool {
+	return strings.Contains(path, "..")
+}
+
+// IsPathWithinDir reports whether targetPath resolves to a location strictly inside dir.
+// Both arguments are resolved to absolute paths first, so the check is robust against
+// "../" traversal sequences in targetPath. A path equal to dir is not considered within it.
+// Use this to prevent path traversal (CWE-22) before writing to a user-influenced path.
+func IsPathWithinDir(targetPath, dir string) (bool, error) {
+	absTargetPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		return false, errors.Wrap(err, "Failed to resolve target path")
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false, errors.Wrap(err, "Failed to resolve dir")
+	}
+
+	relPath, err := filepath.Rel(absDir, absTargetPath)
+	if err != nil {
+		// the paths share no common base (e.g. different Windows volumes) - not within
+		return false, nil
+	}
+
+	return relPath != "." &&
+		relPath != ".." &&
+		!strings.HasPrefix(relPath, ".."+string(os.PathSeparator)), nil
+}
+
 // FileExists returns true if the file @ path exists
 func FileExists(path string) bool {
 	_, err := os.Stat(path)
@@ -559,7 +592,7 @@ func GetRuntimeNameAndVersion(runtime string) (string, string) {
 
 	switch runtimeAndVersion := strings.Split(runtime, ":"); len(runtimeAndVersion) {
 
-	// if both are passed (e.g. python:3.9) - return them both
+	// if both are passed (e.g. python:3.12) - return them both
 	case 2:
 		return runtimeAndVersion[0], runtimeAndVersion[1]
 

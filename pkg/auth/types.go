@@ -41,7 +41,7 @@ func ContextKeyByKind(kind Kind) SessionContextKey {
 	switch kind {
 	case KindNop:
 		return NopContextKey
-	case KindIguazio:
+	case KindIguazio, KindIguazioV4:
 		return IguazioContextKey
 	default:
 		return NopContextKey
@@ -91,7 +91,7 @@ type Session interface {
 	GetPassword() string
 	GetUserID() string
 	GetGroupIDs() []string
-	CompileAuthorizationBasicHeader() string
+	CompileAuthorizationHeader() string
 	GetUserLabels() map[string]string
 }
 

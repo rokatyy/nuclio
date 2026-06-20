@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/nuclio/nuclio/pkg/common"
+	"github.com/nuclio/nuclio/pkg/common/annotations"
 	"github.com/nuclio/nuclio/pkg/common/headers"
 	"github.com/nuclio/nuclio/pkg/errgroup"
 	"github.com/nuclio/nuclio/pkg/functionconfig"
@@ -41,7 +42,7 @@ import (
 	"github.com/nuclio/nuclio/pkg/platform/kube/utils"
 	"github.com/nuclio/nuclio/pkg/platformconfig"
 	"github.com/nuclio/nuclio/pkg/processor"
-	"github.com/nuclio/nuclio/pkg/processor/config"
+	processorconfig "github.com/nuclio/nuclio/pkg/processor/config"
 	"github.com/nuclio/nuclio/pkg/processor/trigger/cron"
 	"github.com/nuclio/nuclio/pkg/processor/trigger/http"
 
@@ -49,13 +50,12 @@ import (
 	"github.com/mitchellh/mapstructure"
 	"github.com/nuclio/errors"
 	"github.com/nuclio/logger"
-	"github.com/v3io/version-go"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	appsv1 "k8s.io/api/apps/v1"
 	autosv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apiresource "k8s.io/apimachinery/pkg/api/resource"
@@ -478,11 +478,7 @@ func (lc *lazyClient) WaitAvailable(ctx context.Context,
 	}
 }
 
-func (lc *lazyClient) Delete(ctx context.Context, namespace string, name string) error {
-	propagationPolicy := metav1.DeletePropagationForeground
-	deleteOptions := metav1.DeleteOptions{
-		PropagationPolicy: &propagationPolicy,
-	}
+func (lc *lazyClient) Delete(ctx context.Context, namespace string, name string, deleteOptions metav1.DeleteOptions) error {
 
 	// Delete ingress
 	ingressName := kube.IngressNameFromFunctionName(name)
@@ -522,6 +518,16 @@ func (lc *lazyClient) Delete(ctx context.Context, namespace string, name string)
 		return errors.Wrap(err, "Failed to delete function secrets")
 	}
 
+	// Delete function k8s CronJobs before the Deployment so they cannot spawn new
+	// Jobs/Pods while we are tearing down the function's workload resources.
+	// CronJobs are not owned by the Deployment, so cascade does not remove them.
+	if lc.platformConfigurationProvider.GetPlatformConfiguration().
+		CronTriggerCreationMode == platformconfig.KubeCronTriggerCreationMode {
+		if err := lc.deleteCronJobs(ctx, name, namespace); err != nil && !apierrors.IsNotFound(err) {
+			return errors.Wrap(err, "Failed to delete function cron jobs")
+		}
+	}
+
 	// Delete Deployment if exists
 	deploymentName := kube.DeploymentNameFromFunctionName(name)
 	err = lc.kubeClientSet.DeleteDeployment(ctx, namespace, deploymentName, deleteOptions)
@@ -534,6 +540,21 @@ func (lc *lazyClient) Delete(ctx context.Context, namespace string, name string)
 			"Deleted deployment",
 			"namespace", namespace,
 			"deploymentName", deploymentName)
+	}
+
+	// When a custom grace period is set (e.g. project deletion), delete ReplicaSets and pods
+	// explicitly so the overridden GracePeriodSeconds applies to actual pod termination.
+	// Deployment cascade does not propagate GracePeriodSeconds to pods, and the ReplicaSet
+	// must be removed first to prevent it from recreating pods we delete.
+	if deleteOptions.GracePeriodSeconds != nil {
+		if err = lc.deleteFunctionReplicaSets(ctx, name, namespace); err != nil && !apierrors.IsNotFound(err) {
+			lc.logger.WarnWith("Failed to delete function replica sets",
+				"namespace", namespace, "name", name, "err", err.Error())
+		}
+		if err = lc.deleteFunctionPods(ctx, name, namespace, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+			lc.logger.WarnWith("Failed to delete function pods",
+				"namespace", namespace, "name", name, "err", err.Error())
+		}
 	}
 
 	// Delete configMap if exists
@@ -553,14 +574,6 @@ func (lc *lazyClient) Delete(ctx context.Context, namespace string, name string)
 	// Delete function events
 	if err = lc.deleteFunctionEvents(ctx, name, namespace); err != nil {
 		return errors.Wrap(err, "Failed to delete function events")
-	}
-
-	// Delete function k8s cronJobs
-	if lc.platformConfigurationProvider.GetPlatformConfiguration().
-		CronTriggerCreationMode == platformconfig.KubeCronTriggerCreationMode {
-		if err := lc.deleteCronJobs(ctx, name, namespace); err != nil {
-			return errors.Wrap(err, "Failed to delete function cron jobs")
-		}
 	}
 
 	lc.logger.DebugWithCtx(ctx, "Deleted deployed function", "namespace", namespace, "name", name)
@@ -1235,6 +1248,7 @@ func (lc *lazyClient) createOrUpdateDeployment(ctx context.Context,
 					PriorityClassName:  function.Spec.PriorityClassName,
 					PreemptionPolicy:   function.Spec.PreemptionPolicy,
 					HostIPC:            function.Spec.HostIPC,
+					RuntimeClassName:   function.Spec.RuntimeClassName,
 				},
 			},
 		}
@@ -1315,6 +1329,7 @@ func (lc *lazyClient) createOrUpdateDeployment(ctx context.Context,
 		deployment.Spec.Template.Spec.NodeName = function.Spec.NodeName
 		deployment.Spec.Template.Spec.PriorityClassName = function.Spec.PriorityClassName
 		deployment.Spec.Template.Spec.PreemptionPolicy = function.Spec.PreemptionPolicy
+		deployment.Spec.Template.Spec.RuntimeClassName = function.Spec.RuntimeClassName
 
 		// apply when provided
 		if imagePullSecrets != "" {
@@ -1639,6 +1654,12 @@ func (lc *lazyClient) createOrUpdateIngress(ctx context.Context,
 		// save to bool if there are current rules
 		ingressRulesExist := len(ingress.Spec.Rules) > 0
 
+		// older controller version: clear all managed fields
+		if common.IsNuclioVersionStale(ingress.Annotations[common.NuclioAnnotationKeyVersion]) {
+			ingress.Labels = functionLabels
+			ingress.Spec = networkingv1.IngressSpec{}
+		}
+
 		if err := lc.populateIngressConfig(ctx, functionLabels, function, &ingress.ObjectMeta, &ingress.Spec); err != nil {
 			return nil, errors.Wrap(err, "Failed to populate ingress spec")
 		}
@@ -1735,7 +1756,6 @@ func (lc *lazyClient) createOrUpdateCronJob(ctx context.Context,
 
 	// Prepare the new cron job object
 
-	// prepare cron job meta
 	cronJobMeta := metav1.ObjectMeta{
 		Name:      kube.CronJobName(),
 		Namespace: function.Namespace,
@@ -1876,15 +1896,8 @@ func (lc *lazyClient) getDeploymentAnnotations(function *nuclioio.NuclioFunction
 		return nil, errors.Wrap(err, "Failed to get function as JSON")
 	}
 
-	var nuclioVersion string
-
-	// get version
-	nuclioVersion = version.Get().Label
-	if nuclioVersion == "" {
-		nuclioVersion = "unknown"
-	}
 	annotations["nuclio.io/function-config"] = serializedFunctionConfigJSON
-	annotations["nuclio.io/controller-version"] = nuclioVersion
+	annotations[common.NuclioAnnotationKeyVersion] = common.GetNuclioVersion()
 
 	// add function annotations
 	for annotationKey, annotationValue := range function.Annotations {
@@ -2127,54 +2140,54 @@ func (lc *lazyClient) generateCronTriggerCronJobSpec(ctx context.Context,
 		}
 	}
 
-	// generate a string containing all the headers with --header flag as prefix, to be used by curl later
-	headersAsCurlArg := ""
-	for headerKey := range attributes.Event.Headers {
-		headerValue := attributes.Event.GetHeaderString(headerKey)
-		headersAsCurlArg = fmt.Sprintf("%s --header \"%s: %s\"", headersAsCurlArg, headerKey, headerValue)
-	}
-
-	// add default headers
-	headersAsCurlArg = fmt.Sprintf("%s --header \"%s: %s\" --header \"%s: %s\"",
-		headersAsCurlArg,
-		headers.InvokeTrigger,
-		"cron",
-		headers.TargetName,
-		function.Name,
-	)
-
 	functionAddress, err := lc.getCronTriggerInvocationURL(resources, function.Namespace)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to get cron trigger invocation URL")
 	}
 
-	// generate the curl command to be run by the CronJob to invoke the function
-	// invoke the function (retry for 10 seconds)
-	curlCommand := fmt.Sprintf("curl --silent %s %s --retry 10 --retry-delay 1 --retry-max-time 10 --retry-connrefused",
-		headersAsCurlArg,
-		functionAddress)
+	// Build curl args using exec form so the CronJob container invokes curl directly,
+	// without a shell. This prevents user-supplied header keys/values or event body
+	// from being interpreted as shell syntax (see GHSA-v5px-423j-pf7p).
+	curlArgs := []string{"--silent"}
 
+	// user-supplied headers, sorted for deterministic ordering across reconciles
+	userHeaderKeys := make([]string, 0, len(attributes.Event.Headers))
+	for headerKey := range attributes.Event.Headers {
+		userHeaderKeys = append(userHeaderKeys, headerKey)
+	}
+	sort.Strings(userHeaderKeys)
+	for _, headerKey := range userHeaderKeys {
+		curlArgs = append(curlArgs,
+			"--header", fmt.Sprintf("%s: %s", headerKey, attributes.Event.GetHeaderString(headerKey)))
+	}
+
+	// default headers
+	curlArgs = append(curlArgs,
+		"--header", fmt.Sprintf("%s: %s", headers.InvokeTrigger, "cron"),
+		"--header", fmt.Sprintf("%s: %s", headers.TargetName, function.Name),
+	)
+
+	// event body, compacted as JSON when valid (for size/readability, not for safety)
 	if attributes.Event.Body != "" {
 		eventBody := attributes.Event.Body
-
-		// if a body exists - dump it into a file, and pass this file as argument (done to support JSON body)
-		eventBodyFilePath := "/tmp/eventbody.out"
-		eventBodyCurlArg := fmt.Sprintf("--data '@%s'", eventBodyFilePath)
-
-		// try compact as JSON (will fail if it's not a valid JSON)
 		eventBodyAsCompactedJSON := bytes.NewBuffer([]byte{})
 		if err := json.Compact(eventBodyAsCompactedJSON, []byte(eventBody)); err == nil {
-
-			// set the compacted JSON as event body
 			eventBody = eventBodyAsCompactedJSON.String()
 		}
-
-		curlCommand = fmt.Sprintf("echo %s > %s && %s %s",
-			strconv.Quote(eventBody),
-			eventBodyFilePath,
-			curlCommand,
-			eventBodyCurlArg)
+		// use --data-raw, not --data: --data treats a leading '@' as "load file"
+		// (and '@-' as "read stdin"), which would let a function spec author exfiltrate
+		// a file from the CronJob pod via a body of e.g. "@/etc/passwd".
+		curlArgs = append(curlArgs, "--data-raw", eventBody)
 	}
+
+	// retry settings and target URL (kept last so curl sees them after all flags)
+	curlArgs = append(curlArgs,
+		"--retry", "10",
+		"--retry-delay", "1",
+		"--retry-max-time", "10",
+		"--retry-connrefused",
+		functionAddress,
+	)
 
 	// get cron job retries until failing a job (default=2)
 	jobBackoffLimit := attributes.JobBackoffLimit
@@ -2193,7 +2206,8 @@ func (lc *lazyClient) generateCronTriggerCronJobSpec(ctx context.Context,
 							Image: common.GetEnvOrDefaultString(
 								"NUCLIO_CONTROLLER_CRON_TRIGGER_CRON_JOB_IMAGE_NAME",
 								"gcr.io/iguazio/curlimages/curl:7.81.0"),
-							Args:            []string{"/bin/sh", "-c", curlCommand},
+							Command:         []string{"curl"},
+							Args:            curlArgs,
 							ImagePullPolicy: v1.PullPolicy(common.GetEnvOrDefaultString("NUCLIO_CONTROLLER_CRON_TRIGGER_CRON_JOB_IMAGE_PULL_POLICY", "IfNotPresent")),
 						},
 					},
@@ -2291,10 +2305,13 @@ func (lc *lazyClient) populateIngressConfig(ctx context.Context,
 		}
 	}
 
-	if _, exists := meta.Annotations["nginx.ingress.kubernetes.io/ssl-redirect"]; !exists &&
+	if _, exists := meta.Annotations[annotations.NginxSSLRedirect]; !exists &&
 		platformConfig.IngressConfig.EnableSSLRedirect {
-		meta.Annotations["nginx.ingress.kubernetes.io/ssl-redirect"] = "true"
+		meta.Annotations[annotations.NginxSSLRedirect] = "true"
 	}
+
+	// stamp current version for upgrade-reconcile detection
+	meta.Annotations[common.NuclioAnnotationKeyVersion] = common.GetNuclioVersion()
 
 	// clear out existing so that we don't keep adding rules
 	spec.Rules = []networkingv1.IngressRule{}
@@ -2783,6 +2800,34 @@ func (lc *lazyClient) getFunctionSecrets(ctx context.Context, function *nuclioio
 }
 
 // deleteFunctionSecrets deletes the function's secrets
+func (lc *lazyClient) deleteFunctionReplicaSets(ctx context.Context, functionName, namespace string) error {
+	lc.logger.DebugWithCtx(ctx, "Deleting function replica sets", "functionName", functionName)
+	if err := lc.kubeClientSet.DeleteCollectionReplicaSets(ctx,
+		namespace,
+		metav1.DeleteOptions{},
+		metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("%s=%s", common.NuclioResourceLabelKeyFunctionName, functionName),
+		}); err != nil {
+		return errors.Wrapf(err, "Failed to delete replica sets for function %s", functionName)
+	}
+	return nil
+}
+
+func (lc *lazyClient) deleteFunctionPods(ctx context.Context, functionName, namespace string, deleteOptions metav1.DeleteOptions) error {
+	lc.logger.DebugWithCtx(ctx, "Deleting function pods",
+		"functionName", functionName,
+		"gracePeriodSeconds", deleteOptions.GracePeriodSeconds)
+	if err := lc.kubeClientSet.DeleteCollectionPods(ctx,
+		namespace,
+		deleteOptions,
+		metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("%s=%s", common.NuclioResourceLabelKeyFunctionName, functionName),
+		}); err != nil {
+		return errors.Wrapf(err, "Failed to delete pods for function %s", functionName)
+	}
+	return nil
+}
+
 func (lc *lazyClient) deleteFunctionSecrets(ctx context.Context, functionName, namespace string) error {
 
 	// function can have multiple secrets, in case a flex volume exists

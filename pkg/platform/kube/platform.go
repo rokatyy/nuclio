@@ -28,6 +28,7 @@ import (
 
 	"github.com/nuclio/nuclio/pkg/auth/nop"
 	"github.com/nuclio/nuclio/pkg/common"
+	"github.com/nuclio/nuclio/pkg/common/annotations"
 	"github.com/nuclio/nuclio/pkg/containerimagebuilderpusher"
 	"github.com/nuclio/nuclio/pkg/errgroup"
 	"github.com/nuclio/nuclio/pkg/functionconfig"
@@ -205,13 +206,13 @@ func (p *Platform) CreateFunction(ctx context.Context, createFunctionOptions *pl
 		return nil, errors.Wrap(err, "Failed to enrich and validate a function configuration")
 	}
 
-	// Check OPA permissions
+	// Check OPA permissions. Retry on a deny to absorb the OPA manifest-propagation lag after a
+	// freshly-created project: the function-create grant may not be live in OPA yet when a
+	// deploy is fired right after project creation. A genuine denial still 403s (after the window).
 	permissionOptions := createFunctionOptions.PermissionOptions
-	permissionOptions.RaiseForbidden = true
-	if _, err := p.QueryOPAFunctionPermissions(ctx,
+	if err := p.EnsureFunctionCreateAuthorized(ctx,
 		createFunctionOptions.FunctionConfig.Meta.Labels[common.NuclioResourceLabelKeyProjectName],
 		createFunctionOptions.FunctionConfig.Meta.Name,
-		opaclient.ActionCreate,
 		&permissionOptions); err != nil {
 		return nil, errors.Wrap(err, "Failed authorizing OPA permissions for resource")
 	}
@@ -736,6 +737,15 @@ func (p *Platform) CreateProject(ctx context.Context, createProjectOptions *plat
 		return errors.Wrap(err, "Failed to enrich a project configuration")
 	}
 
+	permissionOptions := createProjectOptions.PermissionOptions
+	permissionOptions.RaiseForbidden = true
+	if err := p.checkProjectAuthorization(ctx,
+		"",
+		opaclient.ActionCreate,
+		&permissionOptions); err != nil {
+		return errors.Wrap(err, "Failed to authorize project creation")
+	}
+
 	// validate
 	if err := p.ValidateProjectConfig(createProjectOptions.ProjectConfig); err != nil {
 		return errors.Wrap(err, "Failed to validate a project configuration")
@@ -748,6 +758,18 @@ func (p *Platform) CreateProject(ctx context.Context, createProjectOptions *plat
 	createdProject, err := p.projectsClient.Create(ctx, createProjectOptions)
 	if err != nil {
 		return errors.Wrap(err, "Failed to create project")
+	}
+
+	// ensure project permissions are populated in OPA
+	if err := common.RetryUntilSuccessful(abstract.OPAPermissionPropagationWindow,
+		abstract.OPAPermissionPropagationInterval,
+		func() bool {
+			if err := p.EnsureProjectRead(ctx, createProjectOptions.ProjectConfig.Meta.Name, &createProjectOptions.PermissionOptions); err != nil {
+				return false
+			}
+			return true
+		}); err != nil {
+		return errors.Wrap(err, "Failed to ensure project permissions are populated in OPA")
 	}
 
 	// adding to cache for 30 seconds, allowing
@@ -764,6 +786,14 @@ func (p *Platform) CreateProject(ctx context.Context, createProjectOptions *plat
 
 // UpdateProject updates an existing project
 func (p *Platform) UpdateProject(ctx context.Context, updateProjectOptions *platform.UpdateProjectOptions) error {
+
+	if err := p.checkProjectAuthorization(ctx,
+		updateProjectOptions.ProjectConfig.Meta.Name,
+		opaclient.ActionUpdate,
+		&updateProjectOptions.PermissionOptions); err != nil {
+		return errors.Wrap(err, "Failed to authorize project update")
+	}
+
 	if err := p.ValidateProjectConfig(&updateProjectOptions.ProjectConfig); err != nil {
 		return nuclio.WrapErrBadRequest(err)
 	}
@@ -781,6 +811,13 @@ func (p *Platform) DeleteProject(ctx context.Context, deleteProjectOptions *plat
 	// enrich to protect test flows where auth session is nil
 	if deleteProjectOptions.AuthSession == nil {
 		deleteProjectOptions.AuthSession = &nop.Session{}
+	}
+
+	if err := p.checkProjectAuthorization(ctx,
+		deleteProjectOptions.Meta.Name,
+		opaclient.ActionDelete,
+		&deleteProjectOptions.PermissionOptions); err != nil {
+		return errors.Wrap(err, "Failed to authorize project deletion")
 	}
 
 	if err := p.ValidateDeleteProjectOptions(ctx, deleteProjectOptions); err != nil {
@@ -886,6 +923,16 @@ func (p *Platform) CreateAPIGateway(ctx context.Context,
 	// enrich
 	p.enrichAPIGatewayConfig(ctx, createAPIGatewayOptions.APIGatewayConfig, nil)
 
+	// check OPA permissions
+	permissionOptions := createAPIGatewayOptions.PermissionOptions
+	if _, err := p.QueryOPAAPIGatewayPermissions(ctx,
+		createAPIGatewayOptions.APIGatewayConfig.Meta.Labels[common.NuclioResourceLabelKeyProjectName],
+		createAPIGatewayOptions.APIGatewayConfig.Meta.Name,
+		opaclient.ActionCreate,
+		&permissionOptions); err != nil {
+		return errors.Wrap(err, "Failed to authorize API gateway creation")
+	}
+
 	// validate
 	if err := p.validateAPIGatewayConfig(ctx,
 		createAPIGatewayOptions.APIGatewayConfig,
@@ -909,9 +956,7 @@ func (p *Platform) CreateAPIGateway(ctx context.Context,
 	newAPIGateway.Status.State = platform.APIGatewayStateWaitingForProvisioning
 
 	// create
-	if _, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioAPIGateways(newAPIGateway.Namespace).
-		Create(ctx, newAPIGateway, metav1.CreateOptions{}); err != nil {
+	if _, err := p.consumer.NuclioClientSet.CreateNuclioAPIGateway(ctx, newAPIGateway.Namespace, newAPIGateway); err != nil {
 		return errors.Wrap(err, "Failed to create an API gateway")
 	}
 
@@ -921,11 +966,23 @@ func (p *Platform) CreateAPIGateway(ctx context.Context,
 // UpdateAPIGateway will update a previously existing api gateway
 func (p *Platform) UpdateAPIGateway(ctx context.Context, updateAPIGatewayOptions *platform.UpdateAPIGatewayOptions) error {
 	// get existing api gateway
-	apiGateway, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioAPIGateways(updateAPIGatewayOptions.APIGatewayConfig.Meta.Namespace).
-		Get(ctx, updateAPIGatewayOptions.APIGatewayConfig.Meta.Name, metav1.GetOptions{})
+	apiGateway, err := p.consumer.NuclioClientSet.GetNuclioAPIGateway(ctx,
+		updateAPIGatewayOptions.APIGatewayConfig.Meta.Namespace,
+		updateAPIGatewayOptions.APIGatewayConfig.Meta.Name)
 	if err != nil {
 		return errors.Wrap(err, "Failed to get api gateway to update")
+	}
+
+	projectName := apiGateway.Labels[common.NuclioResourceLabelKeyProjectName]
+
+	// check OPA permissions
+	permissionOptions := updateAPIGatewayOptions.PermissionOptions
+	if _, err := p.QueryOPAAPIGatewayPermissions(ctx,
+		projectName,
+		apiGateway.Name,
+		opaclient.ActionUpdate,
+		&permissionOptions); err != nil {
+		return errors.Wrap(err, "Failed to authorize API gateway update")
 	}
 
 	// restore existing config
@@ -977,9 +1034,9 @@ func (p *Platform) UpdateAPIGateway(ctx context.Context, updateAPIGatewayOptions
 	apiGateway.Status.State = platform.APIGatewayStateWaitingForProvisioning
 
 	// update
-	if _, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioAPIGateways(updateAPIGatewayOptions.APIGatewayConfig.Meta.Namespace).
-		Update(ctx, apiGateway, metav1.UpdateOptions{}); err != nil {
+	if _, err := p.consumer.NuclioClientSet.UpdateNuclioAPIGateway(ctx,
+		updateAPIGatewayOptions.APIGatewayConfig.Meta.Namespace,
+		apiGateway); err != nil {
 		return errors.Wrap(err, "Failed to update an api gateway")
 	}
 
@@ -994,12 +1051,33 @@ func (p *Platform) DeleteAPIGateway(ctx context.Context, deleteAPIGatewayOptions
 		return errors.Wrap(err, "Failed to validate an API gateway's metadata")
 	}
 
+	// get existing api gateway to resolve project name for OPA check
+	apiGatewayToDelete, err := p.consumer.NuclioClientSet.GetNuclioAPIGateway(ctx,
+		deleteAPIGatewayOptions.Meta.Namespace,
+		deleteAPIGatewayOptions.Meta.Name)
+	if err != nil {
+		return errors.Wrap(err, "Failed to get API gateway to delete")
+	}
+
+	projectName := apiGatewayToDelete.Labels[common.NuclioResourceLabelKeyProjectName]
+
+	// check OPA permissions
+	permissionOptions := deleteAPIGatewayOptions.PermissionOptions
+	if _, err := p.QueryOPAAPIGatewayPermissions(ctx,
+		projectName,
+		deleteAPIGatewayOptions.Meta.Name,
+		opaclient.ActionDelete,
+		&permissionOptions); err != nil {
+		return errors.Wrap(err, "Failed to authorize API gateway deletion")
+	}
+
 	p.Logger.DebugWithCtx(ctx, "Deleting api gateway", "name", deleteAPIGatewayOptions.Meta.Name)
 
 	// delete
-	if err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioAPIGateways(deleteAPIGatewayOptions.Meta.Namespace).
-		Delete(ctx, deleteAPIGatewayOptions.Meta.Name, metav1.DeleteOptions{}); err != nil {
+	if err := p.consumer.NuclioClientSet.DeleteNuclioAPIGateway(ctx,
+		deleteAPIGatewayOptions.Meta.Namespace,
+		deleteAPIGatewayOptions.Meta.Name,
+		metav1.DeleteOptions{}); err != nil {
 
 		return errors.Wrapf(err,
 			"Failed to delete API gateway %s from namespace %s",
@@ -1020,9 +1098,9 @@ func (p *Platform) GetAPIGateways(ctx context.Context, getAPIGatewaysOptions *pl
 	if getAPIGatewaysOptions.Name != "" {
 
 		// get specific NuclioAPIGateway CR
-		apiGateway, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-			NuclioAPIGateways(getAPIGatewaysOptions.Namespace).
-			Get(ctx, getAPIGatewaysOptions.Name, metav1.GetOptions{})
+		apiGateway, err := p.consumer.NuclioClientSet.GetNuclioAPIGateway(ctx,
+			getAPIGatewaysOptions.Namespace,
+			getAPIGatewaysOptions.Name)
 		if err != nil {
 
 			// if we didn't find the NuclioAPIGateway, return an empty slice
@@ -1066,8 +1144,9 @@ func (p *Platform) GetAPIGateways(ctx context.Context, getAPIGatewaysOptions *pl
 		platformAPIGateways = append(platformAPIGateways, newAPIGateway)
 	}
 
-	// render it
-	return platformAPIGateways, nil
+	return p.FilterAPIGatewaysByPermissions(ctx,
+		&getAPIGatewaysOptions.PermissionOptions,
+		platformAPIGateways)
 }
 
 // CreateFunctionEvent will create a new function event that can later be used as a template from
@@ -1096,9 +1175,9 @@ func (p *Platform) CreateFunctionEvent(ctx context.Context, createFunctionEventO
 		return errors.Wrap(err, "Failed authorizing OPA permissions for resource")
 	}
 
-	if _, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioFunctionEvents(createFunctionEventOptions.FunctionEventConfig.Meta.Namespace).
-		Create(ctx, &newFunctionEvent, metav1.CreateOptions{}); err != nil {
+	if _, err := p.consumer.NuclioClientSet.CreateNuclioFunctionEvent(ctx,
+		createFunctionEventOptions.FunctionEventConfig.Meta.Namespace,
+		&newFunctionEvent); err != nil {
 		return errors.Wrap(err, "Failed to create a function event")
 	}
 	return nil
@@ -1109,9 +1188,9 @@ func (p *Platform) UpdateFunctionEvent(ctx context.Context, updateFunctionEventO
 	updatedFunctionEvent := nuclioio.NuclioFunctionEvent{}
 	p.platformFunctionEventToFunctionEvent(&updateFunctionEventOptions.FunctionEventConfig, &updatedFunctionEvent)
 
-	functionEvent, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioFunctionEvents(updateFunctionEventOptions.FunctionEventConfig.Meta.Namespace).
-		Get(ctx, updateFunctionEventOptions.FunctionEventConfig.Meta.Name, metav1.GetOptions{})
+	functionEvent, err := p.consumer.NuclioClientSet.GetNuclioFunctionEvent(ctx,
+		updateFunctionEventOptions.FunctionEventConfig.Meta.Namespace,
+		updateFunctionEventOptions.FunctionEventConfig.Meta.Name)
 	if err != nil {
 		return errors.Wrap(err, "Failed to get a function event")
 	}
@@ -1139,9 +1218,9 @@ func (p *Platform) UpdateFunctionEvent(ctx context.Context, updateFunctionEventO
 	functionEvent.Annotations = updatedFunctionEvent.Annotations
 	functionEvent.Labels = updatedFunctionEvent.Labels
 
-	if _, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioFunctionEvents(updateFunctionEventOptions.FunctionEventConfig.Meta.Namespace).
-		Update(ctx, functionEvent, metav1.UpdateOptions{}); err != nil {
+	if _, err := p.consumer.NuclioClientSet.UpdateNuclioFunctionEvent(ctx,
+		updateFunctionEventOptions.FunctionEventConfig.Meta.Namespace,
+		functionEvent); err != nil {
 		return errors.Wrap(err, "Failed to update a function event")
 	}
 
@@ -1150,9 +1229,9 @@ func (p *Platform) UpdateFunctionEvent(ctx context.Context, updateFunctionEventO
 
 // DeleteFunctionEvent will delete a previously existing function event
 func (p *Platform) DeleteFunctionEvent(ctx context.Context, deleteFunctionEventOptions *platform.DeleteFunctionEventOptions) error {
-	functionEventToDelete, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioFunctionEvents(deleteFunctionEventOptions.Meta.Namespace).
-		Get(ctx, deleteFunctionEventOptions.Meta.Name, metav1.GetOptions{})
+	functionEventToDelete, err := p.consumer.NuclioClientSet.GetNuclioFunctionEvent(ctx,
+		deleteFunctionEventOptions.Meta.Namespace,
+		deleteFunctionEventOptions.Meta.Name)
 	if err != nil {
 		return errors.Wrap(err, "Failed to get a function event")
 	}
@@ -1172,9 +1251,10 @@ func (p *Platform) DeleteFunctionEvent(ctx context.Context, deleteFunctionEventO
 		return errors.Wrap(err, "Failed authorizing OPA permissions for resource")
 	}
 
-	if err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioFunctionEvents(deleteFunctionEventOptions.Meta.Namespace).
-		Delete(ctx, deleteFunctionEventOptions.Meta.Name, metav1.DeleteOptions{}); err != nil {
+	if err := p.consumer.NuclioClientSet.DeleteNuclioFunctionEvent(ctx,
+		deleteFunctionEventOptions.Meta.Namespace,
+		deleteFunctionEventOptions.Meta.Name,
+		metav1.DeleteOptions{}); err != nil {
 		return errors.Wrapf(err,
 			"Failed to delete function event %s from namespace %s",
 			deleteFunctionEventOptions.Meta.Name,
@@ -1193,9 +1273,9 @@ func (p *Platform) GetFunctionEvents(ctx context.Context, getFunctionEventsOptio
 	if getFunctionEventsOptions.Meta.Name != "" {
 
 		// get specific function event CR
-		functionEvent, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-			NuclioFunctionEvents(getFunctionEventsOptions.Meta.Namespace).
-			Get(ctx, getFunctionEventsOptions.Meta.Name, metav1.GetOptions{})
+		functionEvent, err := p.consumer.NuclioClientSet.GetNuclioFunctionEvent(ctx,
+			getFunctionEventsOptions.Meta.Namespace,
+			getFunctionEventsOptions.Meta.Name)
 
 		if err != nil {
 
@@ -1223,9 +1303,9 @@ func (p *Platform) GetFunctionEvents(ctx context.Context, getFunctionEventsOptio
 				encodedFunctionNames)
 		}
 
-		functionEventInstanceList, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-			NuclioFunctionEvents(getFunctionEventsOptions.Meta.Namespace).
-			List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+		functionEventInstanceList, err := p.consumer.NuclioClientSet.ListNuclioFunctionEvents(ctx,
+			getFunctionEventsOptions.Meta.Namespace,
+			metav1.ListOptions{LabelSelector: labelSelector})
 
 		if err != nil {
 			return nil, errors.Wrap(err, "Failed to list function events")
@@ -1401,6 +1481,10 @@ func (p *Platform) ValidateFunctionConfig(ctx context.Context, functionConfig *f
 		return errors.Wrap(err, "Service account validation failed")
 	}
 
+	if err := p.validateSecretsAllowed(ctx, functionConfig); err != nil {
+		return errors.Wrap(err, "Secrets validation failed")
+	}
+
 	if err := p.validateInitContainersSpec(functionConfig); err != nil {
 		return errors.Wrap(err, "Init containers validation failed")
 	}
@@ -1455,9 +1539,7 @@ func (p *Platform) generateFunctionToAPIGatewaysMapping(ctx context.Context, nam
 	functionToAPIGateways := map[string][]string{}
 
 	// get all api gateways in the namespace
-	apiGateways, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioAPIGateways(namespace).
-		List(ctx, metav1.ListOptions{})
+	apiGateways, err := p.consumer.NuclioClientSet.ListNuclioAPIGateways(ctx, namespace, metav1.ListOptions{})
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to list API gateways")
 	}
@@ -1479,9 +1561,9 @@ func (p *Platform) generateFunctionToAPIGatewaysMapping(ctx context.Context, nam
 
 func (p *Platform) getApiGateways(ctx context.Context, getAPIGatewaysOptions *platform.GetAPIGatewaysOptions) ([]nuclioio.NuclioAPIGateway, error) {
 
-	apiGateways, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioAPIGateways(getAPIGatewaysOptions.Namespace).
-		List(ctx, metav1.ListOptions{LabelSelector: getAPIGatewaysOptions.Labels})
+	apiGateways, err := p.consumer.NuclioClientSet.ListNuclioAPIGateways(ctx,
+		getAPIGatewaysOptions.Namespace,
+		metav1.ListOptions{LabelSelector: getAPIGatewaysOptions.Labels})
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to list API gateways")
 	}
@@ -1700,6 +1782,11 @@ func (p *Platform) enrichContainerSpec(container *v1.Container, functionConfig *
 	}
 	container.Env = common.MergeEnvSlices(container.Env, functionConfig.Spec.Env)
 
+	// enrich envFrom - propagate function-level bulk secret/configmap mounts to the container,
+	// skipping entries already present to avoid duplicates.
+	// This ensures init containers and sidecars receive the same envFrom sources as the main processor container
+	container.EnvFrom = common.MergeEnvFromSlices(container.EnvFrom, functionConfig.Spec.EnvFrom)
+
 	// image pull policy
 	if container.ImagePullPolicy == "" {
 		container.ImagePullPolicy = functionConfig.Spec.ImagePullPolicy
@@ -1738,13 +1825,9 @@ func (p *Platform) getFunction(ctx context.Context,
 		"name", getFunctionOptions.Name)
 
 	// get specific function CR
-	function, err := p.consumer.NuclioClientSet.NuclioV1beta1().
-		NuclioFunctions(getFunctionOptions.Namespace).
-		Get(ctx,
-			getFunctionOptions.Name,
-			metav1.GetOptions{
-				ResourceVersion: getFunctionOptions.ResourceVersion,
-			})
+	function, err := p.consumer.NuclioClientSet.GetNuclioFunction(ctx,
+		getFunctionOptions.Namespace,
+		getFunctionOptions.Name)
 	if err != nil {
 
 		// if we didn't find the function, return nothing
@@ -1911,6 +1994,10 @@ func (p *Platform) validateAPIGatewayConfig(ctx context.Context,
 		return errors.Wrap(err, "Failed to validate ingresses")
 	}
 
+	if err := p.validateAPIGatewayAuthentication(apiGateway); err != nil {
+		return errors.Wrap(err, "Failed to validate authentication")
+	}
+
 	return nil
 }
 
@@ -1946,7 +2033,7 @@ func (p *Platform) validateServiceAccount(ctx context.Context, functionConfig *f
 		return errors.New("Function does not have a project label, cannot validate service account")
 	}
 
-	if !p.Config.Kube.IsConfiguredToVerifyServiceAccountFromProject() {
+	if !p.Config.Kube.IsConfiguredToVerifyServiceAccount() {
 		return nil
 	}
 
@@ -1956,11 +2043,72 @@ func (p *Platform) validateServiceAccount(ctx context.Context, functionConfig *f
 		p.Config.Kube.ProjectSecretTemplate,
 		p.Config.Kube.ProjectSecretDefaultServiceAccountKey,
 		p.Config.Kube.ProjectSecretAllowedServiceAccountsKey,
+		p.Config.Kube.ProjectSecretForbiddenServiceAccountsKey,
+		p.Config.Kube.DefaultForbiddenServiceAccounts,
 		functionConfig.Spec.ServiceAccount,
 		projectName,
 		functionConfig.Meta.Namespace,
 		false); err != nil {
 		return errors.Wrap(err, "Failed to validate service account")
+	}
+	return nil
+}
+
+// validateSecretsAllowed ensures that the function does not reference any project secrets
+// that belong to a different project. It checks all secret references defined in EnvFrom,
+// Env, and Volumes
+func (p *Platform) validateSecretsAllowed(ctx context.Context, functionConfig *functionconfig.Config) error {
+	if p.GetConfig().Kube.ProjectSecretTemplate == "" {
+		return nil
+	}
+
+	projectName, ok := functionConfig.Meta.Labels[common.NuclioResourceLabelKeyProjectName]
+	if !ok {
+		return errors.New("Function does not have a project label, cannot validate secrets")
+	}
+
+	projectSecretName, err := utils.RenderProjectSecretName(p.GetConfig().Kube.ProjectSecretTemplate, projectName)
+	if err != nil {
+		return errors.Wrap(err, "Failed to render project secret name")
+	}
+
+	projectSecretPrefix, err := utils.RenderProjectSecretName(p.GetConfig().Kube.ProjectSecretTemplate, "")
+	if err != nil {
+		return errors.Wrap(err, "Failed to render project secret prefix")
+	}
+
+	for _, secret := range functionConfig.Spec.EnvFrom {
+		if secret.SecretRef != nil {
+			secretName := secret.SecretRef.Name
+			if err = p.validateSecretIsAllowed(secretName, projectSecretPrefix, projectSecretName); err != nil {
+				return errors.Wrap(err, "Failed to validate Spec.EnvFrom")
+			}
+		}
+	}
+
+	for _, secret := range functionConfig.Spec.Env {
+		if secret.ValueFrom != nil && secret.ValueFrom.SecretKeyRef != nil {
+			secretName := secret.ValueFrom.SecretKeyRef.Name
+			if err = p.validateSecretIsAllowed(secretName, projectSecretPrefix, projectSecretName); err != nil {
+				return errors.Wrap(err, "Failed to validate spec.Env")
+			}
+		}
+	}
+
+	for _, volume := range functionConfig.Spec.Volumes {
+		if volume.Volume.Secret != nil {
+			secretName := volume.Volume.Secret.SecretName
+			if err = p.validateSecretIsAllowed(secretName, projectSecretPrefix, projectSecretName); err != nil {
+				return errors.Wrap(err, "Failed to validate spec.Volumes")
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Platform) validateSecretIsAllowed(secretName, projectSecretPrefix, projectSecretName string) error {
+	if strings.HasPrefix(secretName, projectSecretPrefix) && secretName != projectSecretName {
+		return errors.New(fmt.Sprintf("Secret %s is not allowed. It belongs to a different project", secretName))
 	}
 	return nil
 }
@@ -2390,4 +2538,34 @@ func (p *Platform) validateProbeSpec(probe *v1.Probe) error {
 	}
 
 	return nil
+}
+
+func (p *Platform) validateAPIGatewayAuthentication(apiGatewayConfig *platform.APIGatewayConfig) error {
+	switch apiGatewayConfig.Spec.AuthenticationMode {
+	case ingress.AuthenticationModeIguazio:
+		// In iguazio authentication mode, overriding the authentication's annotations is restricted by design
+		// As the parameters optimized for the Iguazio tokens
+		restrictedAnnotations := annotations.GetIguazioAuthenticationModeAnnotations()
+		for annotationKey := range apiGatewayConfig.Meta.Annotations {
+			if _, isRestrictedAnnotation := restrictedAnnotations[annotationKey]; isRestrictedAnnotation {
+				return nuclio.NewErrBadRequest(fmt.Sprintf("Annotation cannot be overridden in iguazio authentication mode - %s", annotationKey))
+			}
+		}
+	default:
+	}
+	return nil
+}
+
+func (p *Platform) checkProjectAuthorization(ctx context.Context,
+	projectName string,
+	action opaclient.Action,
+	permissionOptions *opaclient.PermissionOptions) error {
+
+	// in Iguazio 3.x, the project leader is the source of truth for authorization
+	if !p.IsAuthKindIguazioV4() {
+		return nil
+	}
+
+	_, err := p.QueryOPAProjectPermissions(ctx, projectName, action, permissionOptions)
+	return err
 }

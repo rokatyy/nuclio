@@ -40,7 +40,7 @@ on:
         type: string
       bump_version_mode:
         description: 'Version bump mode'
-        default: 'bump-minor'
+        default: 'bump-patch'
         type: choice
         options: ['bump-minor', 'bump-major', 'bump-patch']
       helm_chart_target_version:
@@ -74,6 +74,12 @@ on:
         required: false
         default: 'development'
         type: string
+      mark_as_latest:
+        description: 'Mark this release as latest (push latest tags, etc.)'
+        required: false
+        default: 'true'
+        type: choice
+        options: [ 'true', 'false' ]
 
 jobs:
   prepare-inputs:
@@ -84,7 +90,7 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       helm_version: ${{ steps.resolve.outputs.helm_version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.branch }}
           # Fetch all history for all tags and branches
@@ -134,13 +140,13 @@ jobs:
     needs: [ prepare-inputs ]
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 0
 
       - name: Generate Changelog with git-cliff
-        uses: orhun/git-cliff-action@d77b37db2e3f7398432d34b72a12aa3e2ba87e51 # 4.6.0
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # 4.8.0
         id: git-cliff
         with:
           config: cliff.toml
@@ -165,7 +171,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.skip_bump_helm_charts != 'true'
     needs: [ prepare-inputs ]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 0
@@ -190,14 +196,17 @@ jobs:
           HELM_TARGET_VERSION: ${{ inputs.helm_chart_target_version }}
 
       - name: Create pull request with bumped charts
-        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "[Chart] Bump to ${{ needs.prepare-inputs.outputs.version }}"
           branch: chart-bump-${{ needs.prepare-inputs.outputs.version }}
           title: "[Chart] Bump to ${{ needs.prepare-inputs.outputs.version }}"
           base: ${{ github.event.inputs.branch }}
-          body: "This PR was automatically created by the release workflow to bump Helm chart version to ${{ needs.prepare-inputs.outputs.version }}."
+          body: |
+            This PR bumps the Helm chart version to `${{ needs.prepare-inputs.outputs.helm_version }}` as part of releasing nuclio `${{ needs.prepare-inputs.outputs.version }}`.
+
+            **This PR must be merged first.** Merging triggers the `Publish Helm Chart` workflow, which packages the chart from this branch and opens a follow-up PR against `gh-pages` to publish it to the Helm repo.
           delete-branch: true
 
   image_matrix_prep:
@@ -206,7 +215,7 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 0
@@ -255,7 +264,7 @@ jobs:
       - name: Set NUCLIO_LABEL to release tag
         run: echo "NUCLIO_LABEL=${{ needs.prepare-inputs.outputs.version }}" >> $GITHUB_ENV
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           # checkout to the specified branch to be able to run workflow from development branch
           # and release from the specified branch
@@ -269,19 +278,19 @@ jobs:
 
       - name: Install QEMU
         if: matrix.arch != 'amd64'
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # 3.6.0
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # 4.1.0
         with:
           platforms: ${{ matrix.arch }}
 
       - name: Login to registry
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # 3.6.0
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # 4.2.0
         with:
           registry: ${{ env.REPO }}
           username: ${{ secrets.QUAYIO_DOCKER_USERNAME }}
           password: ${{ secrets.QUAYIO_DOCKER_PASSWORD }}
 
       - name: Login to cache registry
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # 3.6.0
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # 4.2.0
         with:
           registry: ${{ env.CACHE_REPO }}
           username: ${{ env.CACHE_REPO_NAME }}
@@ -313,10 +322,16 @@ jobs:
           SKIP_BUILD_GOLANG_ONBUILD_ALPINE: true
 
       - name: Tag and push latest images
-        if: env.NUCLIO_LABEL != 'unstable' && github.event_name == 'workflow_dispatch'
+        if: env.NUCLIO_LABEL != 'unstable' && github.event_name == 'workflow_dispatch' && github.event.inputs.mark_as_latest == 'true'
         run: |
-          docker tag "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:$NUCLIO_LABEL-$NUCLIO_ARCH" "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:latest-$NUCLIO_ARCH"
-          docker push "$NUCLIO_DOCKER_REPO/${{ matrix.docker_image_rule }}:latest-$NUCLIO_ARCH"
+          tag_suffix=""
+          docker_image_rule="${{ matrix.docker_image_rule }}"
+          if [ "${docker_image_rule}" = "handler-builder-golang-onbuild-alpine" ]; then
+            tag_suffix="-alpine"
+            docker_image_rule="handler-builder-golang-onbuild"
+          fi
+          docker tag "$NUCLIO_DOCKER_REPO/${docker_image_rule}:$NUCLIO_LABEL-$NUCLIO_ARCH${tag_suffix}" "$NUCLIO_DOCKER_REPO/${docker_image_rule}:latest-$NUCLIO_ARCH${tag_suffix}"
+          docker push "$NUCLIO_DOCKER_REPO/${docker_image_rule}:latest-$NUCLIO_ARCH${tag_suffix}"
         env:
           DOCKER_IMAGES_RULES: ${{ matrix.docker_image_rule }}
 
@@ -339,7 +354,7 @@ jobs:
       - name: Set NUCLIO_LABEL to release tag
         run: echo "NUCLIO_LABEL=${{ needs.prepare-inputs.outputs.version }}" >> $GITHUB_ENV
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           # checkout to the specified branch to be able to run workflow from development branch
           # and release from the specified branch
@@ -353,7 +368,7 @@ jobs:
 
       - name: Install QEMU
         if: matrix.arch != 'amd64'
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # 3.6.0
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # 4.1.0
         with:
           platforms: ${{ matrix.arch }}
 
@@ -376,55 +391,7 @@ jobs:
           files: '/home/runner/go/bin/nuctl-*'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-  helm-publish:
-    name: Publish helm charts
-    if: github.event_name == 'workflow_dispatch' && (github.event.inputs.skip_bump_helm_charts != 'true' || github.event.inputs.bump_helm_charts_only == 'true')
-    needs: [ prepare-inputs, release-images ]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-         ref: ${{ github.event.inputs.branch }}
-
-      - name: Checkout gh-pages branch
-        uses: actions/checkout@v5
-        with:
-          ref: gh-pages
-          path: nuclio-helm
-
-      - name: Set up Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # 4.3.1
-
-      - name: Set up yq
-        run: |
-          wget https://github.com/mikefarah/yq/releases/download/v4.15.1/yq_linux_amd64 -O /usr/local/bin/yq
-          chmod +x /usr/local/bin/yq
-
-      - name: Set commit message
-        id: set_commit_message
-        run: |
-          HELM_PUBLISH_COMMIT_MESSAGE="Releasing chart ${{ needs.prepare-inputs.outputs.helm_version }}"
-          echo "HELM_PUBLISH_COMMIT_MESSAGE=$HELM_PUBLISH_COMMIT_MESSAGE" >> $GITHUB_ENV
-
-      - name: Create package and update index
-        run: |
-          echo "Creating package and updating index"
-          helm package -d nuclio-helm/charts hack/k8s/helm/nuclio
-          cd nuclio-helm/charts
-          helm repo index . --url https://nuclio.github.io/nuclio/charts/ --merge index.yaml
-
-      - name: Create PR to gh-pages
-        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "${{ env.HELM_PUBLISH_COMMIT_MESSAGE }}"
-          title: "${{ env.HELM_PUBLISH_COMMIT_MESSAGE }}"
-          body: |
-            This PR publishes the Helm chart for version `${{ needs.prepare-inputs.outputs.helm_version }}`.
-
-            ⚠️ Please ensure the branch `${{ github.event.inputs.branch }}` has been bumped before merging this PR.
-          branch: release/helm-chart-${{ needs.prepare-inputs.outputs.helm_version }}
-          base: gh-pages
-          path: nuclio-helm
-          delete-branch: true
+# NOTE: Publishing the helm chart to `gh-pages` has moved to `helm-publish.yaml`,
+# which is triggered by the merge of the `chart-bump-*` PR opened above.
+# This guarantees gh-pages is updated from the bumped chart on the target branch
+# rather than the pre-bump state.

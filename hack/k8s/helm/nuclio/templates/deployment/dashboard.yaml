@@ -17,6 +17,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ template "nuclio.dashboardName" . }}
+  labels:
+    {{- include "nuclio.standardLabels.dashboard" . | nindent 4 }}
 spec:
   replicas: {{ .Values.dashboard.replicas }}
   selector:
@@ -29,11 +31,7 @@ spec:
   template:
     metadata:
       labels:
-        app: {{ template "nuclio.name" . }}
-        release: {{ .Release.Name }}
-        nuclio.io/app: dashboard
-        nuclio.io/name: {{ template "nuclio.dashboardName" . }}
-        nuclio.io/class: service
+        {{- include "nuclio.podTemplateLabels.dashboard" . | nindent 8 }}
       annotations:
         nuclio.io/version: {{ .Values.dashboard.image.tag }}
         checksum/secret-registry-credentials: {{ include (print $.Template.BasePath "/secret/registry-credentials.yaml") . | sha256sum }}
@@ -41,6 +39,7 @@ spec:
         checksum/configmap-platform: {{ include (print $.Template.BasePath "/configmap/platform.yaml") . | sha256sum }}
     spec:
       serviceAccountName: {{ template "nuclio.serviceAccountName" . }}
+      {{- include "nuclio.imagePullSecrets" . | nindent 6 }}
       securityContext:
         {{- toYaml .Values.dashboard.securityContext | nindent 8 }}
       containers:
@@ -108,6 +107,8 @@ spec:
           value: {{ .Values.dashboard.authConfig.iguazio.timeout }}
         - name: NUCLIO_AUTH_IGUAZIO_VERIFICATION_URL
           value: {{ .Values.dashboard.authConfig.iguazio.sessionVerificationURL }}
+        - name: NUCLIO_AUTH_IGUAZIO_VERIFICATION_METHOD
+          value: {{ .Values.dashboard.authConfig.iguazio.verificationMethod }}
         - name: NUCLIO_AUTH_IGUAZIO_VERIFICATION_DATA_ENRICHMENT_URL
           value: {{ .Values.dashboard.authConfig.iguazio.sessionVerificationDataEnrichmentURL }}
         - name: NUCLIO_AUTH_IGUAZIO_CACHE_SIZE
@@ -164,6 +165,10 @@ spec:
         {{- if .Values.dashboard.kaniko.defaultServiceAccount }}
         - name: NUCLIO_KANIKO_DEFAULT_SERVICE_ACCOUNT
           value: {{ .Values.dashboard.kaniko.defaultServiceAccount }}
+        {{- end }}
+        {{- if .Values.dashboard.kaniko.podLabels }}
+        - name: NUCLIO_KANIKO_POD_LABELS
+          value: {{ .Values.dashboard.kaniko.podLabels | toJson | quote }}
         {{- end }}
         {{- if .Values.registry.runRegistryURL }}
         - name: NUCLIO_DASHBOARD_RUN_REGISTRY_URL
@@ -237,7 +242,9 @@ spec:
           - "--log-level={{ .Values.dashboard.opa.logLevel }}"
           - "--log-format={{ .Values.dashboard.opa.logFormat }}"
           - "--ignore=.*"
-          - "--disable-telemetry"
+          {{- range .Values.dashboard.opa.extraArgs }}
+          - {{ . | quote }}
+          {{- end }}
         volumeMounts:
           - readOnly: true
             mountPath: /config

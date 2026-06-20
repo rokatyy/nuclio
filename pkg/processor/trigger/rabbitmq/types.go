@@ -27,6 +27,13 @@ import (
 	"github.com/nuclio/errors"
 )
 
+type OnProcessError string
+
+const (
+	OnProcessErrorAck  OnProcessError = "ack"
+	OnProcessErrorNack OnProcessError = "nack"
+)
+
 type Configuration struct {
 	trigger.Configuration
 	ExchangeName      string
@@ -37,7 +44,8 @@ type Configuration struct {
 	PrefetchCount     int
 	DurableExchange   bool
 	DurableQueue      bool
-
+	OnError           OnProcessError
+	RequeueOnError    bool
 	reconnectDuration time.Duration
 	reconnectInterval time.Duration
 }
@@ -46,7 +54,11 @@ func NewConfiguration(id string,
 	triggerConfiguration *functionconfig.Trigger,
 	runtimeConfiguration *runtime.Configuration) (*Configuration, error) {
 	var err error
-	newConfiguration := Configuration{}
+	newConfiguration := Configuration{
+		// default to durable queue, as newer versions of RabbitMQ require durable queues
+		// Can be overridden by the user by setting the durableQueue attribute to false
+		DurableQueue: true,
+	}
 
 	// create base
 	baseConfiguration, err := trigger.NewConfiguration(id, triggerConfiguration, runtimeConfiguration)

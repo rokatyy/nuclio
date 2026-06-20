@@ -35,7 +35,6 @@ import (
 
 type rabbitMq struct {
 	trigger.AbstractTrigger
-	event                      Event
 	configuration              *Configuration
 	consumerName               string
 	brokerConn                 *amqp.Connection
@@ -55,20 +54,20 @@ func newTrigger(parentLogger logger.Logger,
 		workerAllocator,
 		&configuration.Configuration,
 		"async",
-		"rabbitMq",
+		"rabbit-mq",
 		configuration.Name,
 		restartTriggerChan)
 	if err != nil {
 		return nil, errors.New("Failed to create abstract trigger")
 	}
 
-	newTrigger := rabbitMq{
+	triggerInstance := rabbitMq{
 		AbstractTrigger: abstractTrigger,
 		configuration:   configuration,
 	}
-	newTrigger.Trigger = &newTrigger
+	triggerInstance.Trigger = &triggerInstance
 
-	return &newTrigger, nil
+	return &triggerInstance, nil
 }
 
 func (rmq *rabbitMq) Initialize() error {
@@ -142,6 +141,16 @@ func (rmq *rabbitMq) createBrokerResources() error {
 		return errors.Wrap(err, "Failed to create topics")
 	}
 
+	// ensure the queue exists before consuming to avoid "delivery not initialized" ack errors
+	if err := rmq.validateQueueExists(); err != nil {
+		return errors.Wrap(err, "Failed to validate queue existence")
+	}
+
+	// apply prefetch QoS regardless of whether topics were provided
+	if err := rmq.applyPrefetchCount(); err != nil {
+		return errors.Wrap(err, "Failed to apply prefetch count")
+	}
+
 	// consume from queue
 	if err := rmq.consume(); err != nil {
 		return errors.Wrap(err, "Failed to consume messages")
@@ -152,6 +161,15 @@ func (rmq *rabbitMq) createBrokerResources() error {
 
 func (rmq *rabbitMq) getConnectionConfig() *amqp.Config {
 	config := amqp.Config{Properties: amqp.NewConnectionProperties()}
+
+	if rmq.configuration.Username != "" && rmq.configuration.Password != "" {
+		config.SASL = []amqp.Authentication{
+			&amqp.PlainAuth{
+				Username: rmq.configuration.Username,
+				Password: rmq.configuration.Password,
+			},
+		}
+	}
 
 	connectionName := rmq.FunctionName + "-" + rmq.ID
 
@@ -242,12 +260,6 @@ func (rmq *rabbitMq) createTopics() error {
 	// to support listening on the provided exchange and queue
 	// TODO: move to ui and add feature flag
 
-	if rmq.configuration.PrefetchCount != 0 {
-		if err := rmq.brokerChannel.Qos(rmq.configuration.PrefetchCount, 0, true); err != nil {
-			return errors.Wrap(err, "Failed to setup prefetch on channel")
-		}
-	}
-
 	// create the exchange
 	if err := rmq.brokerChannel.ExchangeDeclare(rmq.configuration.ExchangeName,
 		"topic",
@@ -262,7 +274,7 @@ func (rmq *rabbitMq) createTopics() error {
 
 	rmq.brokerQueue, err = rmq.brokerChannel.QueueDeclare(
 		rmq.configuration.QueueName,    // queue name (account  + function name)
-		rmq.configuration.DurableQueue, // durable  TBD: change to true if/when we bind to persistent storage
+		rmq.configuration.DurableQueue, // durable
 		false,                          // delete when unused
 		false,                          // exclusive
 		false,                          // no-wait
@@ -288,6 +300,40 @@ func (rmq *rabbitMq) createTopics() error {
 			"exchangeName", rmq.configuration.ExchangeName)
 
 	}
+	return nil
+}
+
+// validateQueueExists verifies that the configured queue exists before starting consumption.
+// This prevents "delivery not initialized" ack errors when the queue does not exist.
+func (rmq *rabbitMq) validateQueueExists() error {
+	checkChannel, err := rmq.brokerConn.Channel()
+	if err != nil {
+		return errors.Wrap(err, "Failed to create channel for queue check")
+	}
+	defer checkChannel.Close()
+	// Passive declare only checks that the queue exists; it does not create or redeclare the queue with these params.
+	_, err = checkChannel.QueueDeclarePassive(
+		rmq.configuration.QueueName,
+		false, // durable
+		false, // autoDelete
+		false, // exclusive
+		false, // noWait
+		nil,   // args
+	)
+	if err != nil {
+		return errors.Wrapf(err, "Queue does not exist, name: %s", rmq.configuration.QueueName)
+	}
+	return nil
+}
+
+func (rmq *rabbitMq) applyPrefetchCount() error {
+	if rmq.configuration.PrefetchCount == 0 {
+		return nil
+	}
+	if err := rmq.brokerChannel.Qos(rmq.configuration.PrefetchCount, 0, true); err != nil {
+		return errors.Wrap(err, "Failed to setup prefetch on channel")
+	}
+	rmq.Logger.DebugWith("Applied prefetch count", "prefetchCount", rmq.configuration.PrefetchCount)
 	return nil
 }
 
@@ -331,6 +377,11 @@ func (rmq *rabbitMq) handleConnectionError(handleErr *amqp.Error) error {
 		return errors.Wrap(err, "Failed to reconnect to broker")
 	}
 
+	// re-apply prefetch QoS on the new channel
+	if err := rmq.applyPrefetchCount(); err != nil {
+		return errors.Wrap(err, "Failed to apply prefetch count")
+	}
+
 	// start message consumption again
 	if err := rmq.consume(); err != nil {
 		return errors.Wrap(err, "Failed to start consuming messages")
@@ -340,20 +391,63 @@ func (rmq *rabbitMq) handleConnectionError(handleErr *amqp.Error) error {
 
 func (rmq *rabbitMq) processMessage(message *amqp.Delivery) {
 
-	// bind to delivery
-
-	// TODO: when moving to multiworkers - need to create event per message
-	rmq.event.message = message
-	rmq.event.SetID(nuclio.ID(message.MessageId))
+	event := rmq.createEventFromMessage(message)
 
 	// submit to worker
-	_, submitError, _ := rmq.AllocateWorkerAndSubmitEvent(&rmq.event, nil, 10*time.Second)
+	response, submitError, processError := rmq.AllocateWorkerAndSubmitEvent(event,
+		nil, time.Duration(*rmq.configuration.WorkerAvailabilityTimeoutMilliseconds)*time.Millisecond)
 
-	// ack the message if we didn't fail to submit
-	if submitError == nil {
-		message.Ack(false) // nolint: errcheck
-	} else {
-		rmq.Logger.WarnWith("Failed to submit to worker", "err", submitError)
+	// if submission failed, nack the message so it can be redelivered
+	if submitError != nil {
+		rmq.Logger.DebugWith("Failed to submit event, message will be nacked and requeued",
+			"err", submitError.Error())
+
+		if err := message.Nack(false, true); err != nil {
+			rmq.Logger.WarnWith("Failed to nack message",
+				"error", err.Error())
+		}
+		return
+	}
+
+	if processError == nil && response.GetStatusCode() >= 400 {
+		processError = errors.New(fmt.Sprintf("Function returned error status code: %d", response.GetStatusCode()))
+	}
+
+	// if processing failed, we can choose to nack or ack based on the configuration
+	if processError != nil {
+		rmq.Logger.DebugWith("Event processing failed, handling according to ACK configuration",
+			"err", processError.Error())
+		rmq.ackOnProcessError(message)
+		return
+	}
+
+	// ack the message if processing succeeded
+	if err := message.Ack(false); err != nil {
+		rmq.Logger.WarnWith("Failed to ack message",
+			"error", err.Error())
+	}
+}
+
+func (rmq *rabbitMq) createEventFromMessage(message *amqp.Delivery) *Event {
+	event := &Event{
+		message: message,
+	}
+	event.SetID(nuclio.ID(message.MessageId))
+	return event
+}
+
+func (rmq *rabbitMq) ackOnProcessError(message *amqp.Delivery) {
+	switch rmq.configuration.OnError {
+	case OnProcessErrorAck:
+		if err := message.Ack(false); err != nil {
+			rmq.Logger.WarnWith("Failed to ack message",
+				"error", err.Error())
+		}
+	default:
+		if err := message.Nack(false, rmq.configuration.RequeueOnError); err != nil {
+			rmq.Logger.WarnWith("Failed to nack message",
+				"error", err.Error())
+		}
 	}
 }
 

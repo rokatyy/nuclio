@@ -34,7 +34,6 @@ import (
 	"github.com/nuclio/nuclio/pkg/errgroup"
 	"github.com/nuclio/nuclio/pkg/functionconfig"
 	"github.com/nuclio/nuclio/pkg/platform"
-	"github.com/nuclio/nuclio/pkg/processor/test/callfunction/python"
 	"github.com/nuclio/nuclio/pkg/processor/test/cloudevents"
 	"github.com/nuclio/nuclio/pkg/processor/test/offline"
 	httptrigger "github.com/nuclio/nuclio/pkg/processor/trigger/http"
@@ -47,10 +46,9 @@ import (
 
 type TestSuite struct {
 	httpsuite.TestSuite
-	CloudEventsTestSuite  cloudevents.TestSuite
-	CallFunctionTestSuite callfunction.TestSuite
-	OfflineTestSuite      offline.TestSuite
-	runtime               string
+	CloudEventsTestSuite cloudevents.TestSuite
+	OfflineTestSuite     offline.TestSuite
+	runtime              string
 }
 
 func (suite *TestSuite) SetupTest() {
@@ -63,9 +61,6 @@ func (suite *TestSuite) SetupTest() {
 	// cloud events suite
 	suite.CloudEventsTestSuite.HTTPSuite = &suite.TestSuite
 	suite.CloudEventsTestSuite.CloudEventsHandler = "eventreturner:handler"
-
-	// call function suite
-	suite.CallFunctionTestSuite.HTTPSuite = &suite.TestSuite
 
 	// offline suite
 	suite.OfflineTestSuite.HTTPSuite = &suite.TestSuite
@@ -131,49 +126,92 @@ func (suite *TestSuite) TestAsyncHandlerManyRequestsManyWorkers() {
 }
 func (suite *TestSuite) TestStreamingHandler() {
 	for _, testCase := range []struct {
-		name    string
-		mode    functionconfig.TriggerWorkMode
-		handler string
+		name                string
+		mode                functionconfig.TriggerWorkMode
+		handler             string
+		expectedStatusCode  int
+		expectedContentType string
 	}{
+		// namings of these tests might be a bit confusing, but here is how they are structured:
+		// * <trigger_mode>_handler_as_<handler_type>[_as_<optional_python_handler_type>]
+		// * <trigger_mode> - sync / async trigger mode, same as testcase.mode
+		// <handler_type>
+		// * response_with_sync_gen - handler returns a response object whose body is a sync generator
+		// * response_with_async_gen - handler returns a response object whose body is an async generator
+		// * sync_gen - handler yields synchronously
+		// * async_gen - handler yields asynchronously
+		// <optional_python_handler_type>: - only set for those where we test both types of function definitions in python (async def / def)
+		// async_def - the python handler is defined as async def, even though it yields synchronously
+		// sync_def - the python handler is defined as def
 		{
-			name:    "sync_handler_as_response_with_sync_gen",
-			mode:    functionconfig.SyncTriggerWorkMode,
-			handler: "stream_outputter:stream_file_lines_as_response_sync",
+			name:                "sync_handler_as_response_with_sync_gen",
+			mode:                functionconfig.SyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_file_lines_as_response_sync",
+			expectedStatusCode:  http.StatusAccepted,
+			expectedContentType: "text/custom",
 		},
 		{
-			name:    "sync_handler_as_response_with_async_gen",
-			mode:    functionconfig.SyncTriggerWorkMode,
-			handler: "stream_outputter:stream_file_lines_as_response_async",
+			name:                "sync_handler_as_response_with_sync_gen_as_async_def",
+			mode:                functionconfig.SyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_file_lines_as_response_sync_as_async",
+			expectedStatusCode:  http.StatusAccepted,
+			expectedContentType: "text/custom",
 		},
 		{
-			name:    "async_handler_as_response_with_async_gen",
-			mode:    functionconfig.AsyncTriggerWorkMode,
-			handler: "stream_outputter:stream_file_lines_as_response_async",
+			name:                "sync_handler_as_response_with_async_gen",
+			mode:                functionconfig.SyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_file_lines_as_response_async",
+			expectedStatusCode:  http.StatusAccepted,
+			expectedContentType: "text/custom",
 		},
 		{
-			name:    "async_handler_as_response_with_sync_gen",
-			mode:    functionconfig.AsyncTriggerWorkMode,
-			handler: "stream_outputter:stream_file_lines_as_response_sync",
+			name:                "async_handler_as_response_with_async_gen",
+			mode:                functionconfig.AsyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_file_lines_as_response_async",
+			expectedStatusCode:  http.StatusAccepted,
+			expectedContentType: "text/custom",
 		},
 		{
-			name:    "sync_handler_as_sync_gen",
-			mode:    functionconfig.SyncTriggerWorkMode,
-			handler: "stream_outputter:stream_file_lines_sync",
+			name:                "async_handler_as_response_with_sync_gen_as_async_def",
+			mode:                functionconfig.AsyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_file_lines_as_response_sync_as_async",
+			expectedStatusCode:  http.StatusAccepted,
+			expectedContentType: "text/custom",
 		},
 		{
-			name:    "sync_handler_as_async_gen",
-			mode:    functionconfig.SyncTriggerWorkMode,
-			handler: "stream_outputter:stream_file_lines_async",
+			name:                "sync_handler_as_sync_gen",
+			mode:                functionconfig.SyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_file_lines_sync",
+			expectedStatusCode:  http.StatusOK,
+			expectedContentType: "text/plain",
 		},
 		{
-			name:    "async_handler_as_async_gen",
-			mode:    functionconfig.AsyncTriggerWorkMode,
-			handler: "stream_outputter:stream_file_lines_async",
+			name:                "sync_handler_as_async_gen",
+			mode:                functionconfig.SyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_file_lines_async",
+			expectedStatusCode:  http.StatusOK,
+			expectedContentType: "text/plain",
 		},
 		{
-			name:    "async_handler_as_sync_gen",
-			mode:    functionconfig.AsyncTriggerWorkMode,
-			handler: "stream_outputter:stream_file_lines_sync",
+			name:                "async_handler_as_async_gen",
+			mode:                functionconfig.AsyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_file_lines_async",
+			expectedStatusCode:  http.StatusOK,
+			expectedContentType: "text/plain",
+		},
+		{
+			name:                "async_handler_as_sync_gen_as_async_def",
+			mode:                functionconfig.AsyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_file_lines_sync_as_async",
+			expectedStatusCode:  http.StatusOK,
+			expectedContentType: "text/plain",
+		},
+		{
+			name:                "sync_handler_as_sync_gen_as_async_as_sync_def",
+			mode:                functionconfig.SyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_file_lines_sync_as_async",
+			expectedStatusCode:  http.StatusOK,
+			expectedContentType: "text/plain",
 		},
 	} {
 		suite.Run(testCase.name, func() {
@@ -183,8 +221,6 @@ func (suite *TestSuite) TestStreamingHandler() {
 			createFunctionOptions.FunctionConfig.Spec.Build.Commands = []string{
 				"python -m pip install aiofile==3.5.0",
 			}
-
-			statusOK := http.StatusOK
 
 			// Generate expected body: "Line 1\nLine 2\n...Line 50\n"
 			var expectedBody string
@@ -198,11 +234,355 @@ func (suite *TestSuite) TestStreamingHandler() {
 					Name:                       "streaming handler",
 					RequestBody:                "",
 					ExpectedResponseBody:       expectedBody,
-					ExpectedResponseStatusCode: &statusOK,
+					ExpectedResponseStatusCode: &testCase.expectedStatusCode,
+					ExpectedResponseHeadersValues: map[string][]string{
+						"Content-Type": {testCase.expectedContentType},
+					},
 				}
 			}
 
 			suite.DeployFunctionAndRequests(createFunctionOptions, requests)
+		})
+	}
+}
+
+func (suite *TestSuite) TestParallelStreamingHandler() {
+	for _, testCase := range []struct {
+		name             string
+		mode             functionconfig.TriggerWorkMode
+		handler          string
+		requestPath      string
+		expectedBody     string
+		totalRequests    int
+		parallelRequests int
+	}{
+		{
+			name:             "sync_parallel_generator",
+			mode:             functionconfig.SyncTriggerWorkMode,
+			handler:          "parallel_stream_outputter:handler",
+			requestPath:      "/generator",
+			expectedBody:     "12345",
+			totalRequests:    10,
+			parallelRequests: 2,
+		},
+		{
+			name:             "sync_parallel_async_generator",
+			mode:             functionconfig.SyncTriggerWorkMode,
+			handler:          "parallel_stream_outputter:handler",
+			requestPath:      "/async-generator",
+			expectedBody:     "12345",
+			totalRequests:    10,
+			parallelRequests: 2,
+		},
+		{
+			name:             "async_parallel_async_generator",
+			mode:             functionconfig.AsyncTriggerWorkMode,
+			handler:          "parallel_stream_outputter:async_handler",
+			requestPath:      "/async-generator",
+			expectedBody:     "12345",
+			totalRequests:    10,
+			parallelRequests: 2,
+		},
+	} {
+		suite.Run(testCase.name, func() {
+			createFunctionOptions := suite.getDeployOptions("parallel-stream-outputter",
+				suite.GetFunctionPath("outputter"), testCase.mode)
+			createFunctionOptions.FunctionConfig.Spec.Handler = testCase.handler
+
+			suite.DeployFunction(createFunctionOptions, func(deployResults *platform.CreateFunctionResult) bool {
+				suite.Require().NotNil(deployResults)
+				suite.WaitForFunctionReadinessProbe(deployResults, 5*time.Second, 30*time.Second)
+
+				statusOK := http.StatusOK
+				request := &httpsuite.Request{
+					Name:                       "parallel streaming request",
+					RequestPath:                testCase.requestPath,
+					RequestBody:                "",
+					ExpectedResponseBody:       testCase.expectedBody,
+					ExpectedResponseStatusCode: &statusOK,
+				}
+				request.Enrich(deployResults)
+
+				// Send requests with limited parallelism
+				// Each request takes ~5 seconds (5 iterations * 1 second sleep)
+				start := time.Now()
+
+				// Semaphore to limit concurrent requests
+				sem := make(chan struct{}, testCase.parallelRequests)
+				errGroup, _ := errgroup.WithContext(suite.Ctx, suite.Logger)
+
+				for i := 0; i < testCase.totalRequests; i++ {
+					index := i
+					sem <- struct{}{} // acquire semaphore
+					errGroup.Go("parallel-streaming-request", func() error {
+						defer func() { <-sem }() // release semaphore
+						reqCopy := *request
+						reqCopy.RequestPath = testCase.requestPath
+						if !suite.SendRequestVerifyResponse(&reqCopy) {
+							return fmt.Errorf("request %d failed", index)
+						}
+						return nil
+					})
+				}
+
+				err := errGroup.Wait()
+				suite.Require().NoError(err)
+
+				totalTime := time.Since(start)
+				suite.Logger.InfoWith("Parallel streaming requests completed",
+					"totalRequests", testCase.totalRequests,
+					"parallelRequests", testCase.parallelRequests,
+					"totalTime", totalTime)
+
+				return true
+			})
+		})
+	}
+}
+
+func (suite *TestSuite) TestStreamingSingleYield() {
+	for _, testCase := range []struct {
+		name                string
+		mode                functionconfig.TriggerWorkMode
+		handler             string
+		expectedStatusCode  int
+		expectedContentType string
+	}{
+		{
+			name:                "sync_handler_as_async_gen_single_yield",
+			mode:                functionconfig.SyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_single_yield_async",
+			expectedStatusCode:  http.StatusOK,
+			expectedContentType: "text/plain",
+		},
+		{
+			name:                "async_handler_as_async_gen_single_yield",
+			mode:                functionconfig.AsyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_single_yield_async",
+			expectedStatusCode:  http.StatusOK,
+			expectedContentType: "text/plain",
+		},
+		{
+			name:                "sync_handler_as_sync_gen_single_yield",
+			mode:                functionconfig.SyncTriggerWorkMode,
+			handler:             "stream_outputter:stream_single_yield_sync_as_async",
+			expectedStatusCode:  http.StatusOK,
+			expectedContentType: "text/plain",
+		},
+	} {
+		suite.Run(testCase.name, func() {
+			createFunctionOptions := suite.getDeployOptions("stream-outputter",
+				suite.GetFunctionPath("outputter"), testCase.mode)
+			createFunctionOptions.FunctionConfig.Spec.Handler = testCase.handler
+			createFunctionOptions.FunctionConfig.Spec.Build.Commands = []string{
+				"python -m pip install aiofile==3.5.0",
+			}
+
+			// Expected body is just the single chunk
+			expectedBody := "single_chunk"
+
+			requests := make([]*httpsuite.Request, 3)
+			for i := range requests {
+				requests[i] = &httpsuite.Request{
+					Name:                       "streaming single yield handler",
+					RequestBody:                "",
+					ExpectedResponseBody:       expectedBody,
+					ExpectedResponseStatusCode: &testCase.expectedStatusCode,
+					ExpectedResponseHeadersValues: map[string][]string{
+						"Content-Type": {testCase.expectedContentType},
+					},
+				}
+			}
+
+			suite.DeployFunctionAndRequests(createFunctionOptions, requests)
+		})
+	}
+}
+
+func (suite *TestSuite) TestStreamingIntegerYield() {
+	for _, testCase := range []struct {
+		name               string
+		mode               functionconfig.TriggerWorkMode
+		handler            string
+		expectedStatusCode int
+	}{
+		{
+			name:               "sync_handler_as_sync_gen_integers",
+			mode:               functionconfig.SyncTriggerWorkMode,
+			handler:            "stream_outputter:stream_integers_sync",
+			expectedStatusCode: http.StatusOK,
+		},
+		{
+			name:               "sync_handler_as_async_gen_integers",
+			mode:               functionconfig.SyncTriggerWorkMode,
+			handler:            "stream_outputter:stream_integers_async",
+			expectedStatusCode: http.StatusOK,
+		},
+		{
+			name:               "async_handler_as_async_gen_integers",
+			mode:               functionconfig.AsyncTriggerWorkMode,
+			handler:            "stream_outputter:stream_integers_async",
+			expectedStatusCode: http.StatusOK,
+		},
+	} {
+		suite.Run(testCase.name, func() {
+			createFunctionOptions := suite.getDeployOptions("stream-int-outputter",
+				suite.GetFunctionPath("outputter"), testCase.mode)
+			createFunctionOptions.FunctionConfig.Spec.Handler = testCase.handler
+
+			// Expected body: integers 1-5 concatenated as their string representations
+			expectedBody := "12345"
+
+			requests := make([]*httpsuite.Request, 3)
+			for i := range requests {
+				requests[i] = &httpsuite.Request{
+					Name:                       "streaming integer yield handler",
+					RequestBody:                "",
+					ExpectedResponseBody:       expectedBody,
+					ExpectedResponseStatusCode: &testCase.expectedStatusCode,
+				}
+			}
+
+			suite.DeployFunctionAndRequests(createFunctionOptions, requests)
+		})
+	}
+}
+
+// TestStreamingFlushPeriod is an e2e test for HTTP trigger streaming flush.
+//
+// The HTTP trigger can flush the response stream to the client at most every streamingFlushPeriod (e.g. 1s),
+// so the client sees data incrementally instead of only when the stream ends. This test verifies that behavior.
+//
+// Setup:
+//   - Deploys a function with trigger attribute streamingFlushPeriod: "1s".
+//   - Handler stream_outputter:stream_flush_test_as_response yields "flush1", sleeps 0.6s, "flush2", sleeps 0.6s, "flush3"
+//     (total ~1.2s of producer time).
+//
+// Assertions:
+//   - The client receives at least one byte within 2.5s. Without periodic flush, the first byte would only
+//     arrive after the producer finishes (~1.2s+) and the connection flushes; with 1s flush we expect data sooner.
+//   - The full response body equals "flush1flush2flush3".
+func (suite *TestSuite) TestStreamingFlushPeriod() {
+	createFunctionOptions := suite.GetDeployOptions("stream-flush-outputter", suite.GetFunctionPath("outputter"))
+	createFunctionOptions.FunctionConfig.Spec.Handler = "stream_outputter:stream_flush_test_as_response"
+	httpTrigger := functionconfig.GetDefaultHTTPTrigger()
+	httpTrigger.Attributes = map[string]interface{}{"streamingFlushPeriod": "1s"}
+	createFunctionOptions.FunctionConfig.Spec.Triggers = map[string]functionconfig.Trigger{
+		httpTrigger.Name: httpTrigger,
+	}
+
+	suite.DeployFunction(createFunctionOptions, func(deployResults *platform.CreateFunctionResult) bool {
+		suite.Require().NotNil(deployResults)
+		suite.WaitForFunctionReadinessProbe(deployResults, 5*time.Second, 30*time.Second)
+
+		request := &httpsuite.Request{
+			Name:          "streaming flush",
+			RequestBody:   "",
+			RequestMethod: http.MethodPost,
+			RequestPath:   "/",
+		}
+		request.Enrich(deployResults)
+
+		httpResponse, err := suite.SendRequest(request)
+		suite.Require().NoError(err)
+		defer httpResponse.Body.Close()
+
+		suite.Require().Equal(http.StatusOK, httpResponse.StatusCode)
+
+		// Read body and verify we get first data within 2.5s (proves periodic flush is sending data before stream ends)
+		firstByteCh := make(chan struct{})
+		bodyDoneCh := make(chan struct{})
+		var fullBody []byte
+		var readErr error
+		go func() {
+			defer close(bodyDoneCh)
+			buf := make([]byte, 1)
+			n, err := httpResponse.Body.Read(buf)
+			if n > 0 {
+				fullBody = append(fullBody, buf[:n]...)
+				close(firstByteCh)
+			}
+			if err != nil && err != io.EOF {
+				readErr = err
+				return
+			}
+			rest, err := io.ReadAll(httpResponse.Body)
+			if err != nil {
+				readErr = err
+			} else {
+				fullBody = append(fullBody, rest...)
+			}
+		}()
+
+		select {
+		case <-firstByteCh:
+			// Good: we received at least one byte before timeout
+		case <-time.After(2500 * time.Millisecond):
+			suite.Require().Fail("Did not receive first byte within 2.5s; streaming flush may not be working")
+		}
+
+		<-bodyDoneCh
+		suite.Require().NoError(readErr)
+		suite.Require().Equal("flush1flush2flush3", string(fullBody))
+		return true
+	})
+}
+
+// TestStreamingHandlerRaisesAfterYield is an e2e test for streaming when the handler raises after yielding.
+//
+// When a streaming handler yields some chunks then raises, the wrapper must still send END_OF_STREAM
+// so the processor closes the response stream. Otherwise the worker blocks or times out.
+//
+// Runs in both sync and async trigger mode. Sends multiple requests to ensure workers are released
+// and can serve subsequent requests.
+func (suite *TestSuite) TestStreamingHandlerRaisesAfterYield() {
+	const numRequests = 5
+
+	for _, testCase := range []struct {
+		name string
+		mode functionconfig.TriggerWorkMode
+	}{
+		{"sync", functionconfig.SyncTriggerWorkMode},
+		{"async", functionconfig.AsyncTriggerWorkMode},
+	} {
+		suite.Run(testCase.name, func() {
+			createFunctionOptions := suite.getDeployOptions("stream-then-raise-outputter",
+				suite.GetFunctionPath("outputter"), testCase.mode)
+			createFunctionOptions.FunctionConfig.Spec.Handler = "stream_outputter:stream_then_raise"
+			if testCase.mode == functionconfig.AsyncTriggerWorkMode {
+				httpTrigger := createFunctionOptions.FunctionConfig.Spec.Triggers["http-trigger"]
+				httpTrigger.AsyncConfig = &functionconfig.AsyncConfig{
+					MinConnectionsNumber: 3,
+					MaxConnectionsNumber: 3,
+				}
+				createFunctionOptions.FunctionConfig.Spec.Triggers["http-trigger"] = httpTrigger
+			}
+
+			suite.DeployFunction(createFunctionOptions, func(deployResults *platform.CreateFunctionResult) bool {
+				suite.Require().NotNil(deployResults)
+				suite.WaitForFunctionReadinessProbe(deployResults, 5*time.Second, 30*time.Second)
+
+				request := &httpsuite.Request{
+					Name:          "streaming handler raises after yield",
+					RequestBody:   "",
+					RequestMethod: http.MethodPost,
+					RequestPath:   "/",
+				}
+				request.Enrich(deployResults)
+
+				for i := 0; i < numRequests; i++ {
+					httpResponse, err := suite.SendRequest(request)
+					suite.Require().NoError(err)
+
+					suite.Require().Equal(http.StatusOK, httpResponse.StatusCode)
+
+					fullBody, readErr := io.ReadAll(httpResponse.Body)
+					suite.Require().NoError(readErr)
+					suite.Require().Equal("chunk1chunk2", string(fullBody))
+					httpResponse.Body.Close()
+				}
+				return true
+			})
 		})
 	}
 }
@@ -437,6 +817,41 @@ func (suite *TestSuite) TestContextInitError() {
 		func(deployResult *platform.CreateFunctionResult) bool {
 			return true
 		})
+}
+
+// TestAsyncSlowInitContext is a regression test for the bug where the async wrapper only
+// bound its TCP server socket inside start() — called after initialize() — so Go's
+// ConnectionAllocator would exhaust its ~30 s retry window with "connection refused"
+// whenever init_context took longer than that.
+//
+// Fix 1 (Python): the socket is now bound in __init__ before init_context runs.
+// Fix 2 (Go):     WaitForStart uses connectionTimeout (2 min) instead of 30 s, so the
+//
+//	handshake packet sent after init_context completes is not missed.
+//
+// The function used here sleeps 35 s in init_context — safely above the old 30 s
+// threshold — and must deploy and respond successfully after both fixes are in place.
+func (suite *TestSuite) TestAsyncSlowInitContext() {
+	const initSleepSeconds = 35
+
+	createFunctionOptions := suite.GetDeployOptionsAsync(
+		"slow-init-context",
+		path.Join(suite.GetTestFunctionsDir(), "common", "slow-init-context", "python"),
+		1)
+
+	createFunctionOptions.FunctionConfig.Spec.Handler = "slowinit:handler"
+	// ReadinessTimeout must comfortably exceed the init_context sleep duration.
+	createFunctionOptions.FunctionConfig.Spec.ReadinessTimeoutSeconds = 3 * initSleepSeconds
+
+	statusOK := http.StatusOK
+	suite.DeployFunctionAndRequests(createFunctionOptions, []*httpsuite.Request{
+		{
+			RequestMethod:              http.MethodPost,
+			RequestBody:                "hello",
+			ExpectedResponseBody:       "ok",
+			ExpectedResponseStatusCode: &statusOK,
+		},
+	})
 }
 
 func (suite *TestSuite) TestModifiedRequestBodySize() {
@@ -709,7 +1124,6 @@ func TestIntegrationSuite(t *testing.T) {
 	for _, testCase := range []struct {
 		runtimeName string
 	}{
-		{runtimeName: "python:3.9"},
 		{runtimeName: "python:3.10"},
 		{runtimeName: "python:3.11"},
 		{runtimeName: "python:3.12"},

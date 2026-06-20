@@ -29,9 +29,17 @@ func GetUserAndGroupIdsFromAuthSession(session auth.Session) []string {
 	if session == nil {
 		return []string{}
 	}
-	ids := []string{
-		session.GetUserID(),
+	var ids []string
+
+	userID := session.GetUserID()
+	if userID != "" {
+		ids = append(ids, userID)
 	}
+
+	if username := session.GetUsername(); username != "" && username != userID {
+		ids = append(ids, username)
+	}
+
 	ids = append(ids, session.GetGroupIDs()...)
 	return ids
 }
@@ -54,7 +62,11 @@ func GetUserAndGroupIdsFromHeaders(request *http.Request) []string {
 }
 
 func GenerateProjectResourceString(projectName, prefix string) string {
-	return fmt.Sprintf("%s/projects/%s", prefix, projectName)
+	resource := fmt.Sprintf("%s/projects", prefix)
+	if projectName != "" {
+		resource = fmt.Sprintf("%s/%s", resource, projectName)
+	}
+	return resource
 }
 
 func GenerateFunctionResourceString(projectName, functionName, prefix string) string {
@@ -67,4 +79,8 @@ func GenerateFunctionRedeployResourceString(projectName, functionName, prefix st
 
 func GenerateFunctionEventResourceString(projectName, functionName, functionEventName, prefix string) string {
 	return fmt.Sprintf("%s/projects/%s/functions/%s/function-events/%s", prefix, projectName, functionName, functionEventName)
+}
+
+func GenerateAPIGatewayResourceString(projectName, apiGatewayName, prefix string) string {
+	return fmt.Sprintf("%s/projects/%s/api-gateways/%s", prefix, projectName, apiGatewayName)
 }

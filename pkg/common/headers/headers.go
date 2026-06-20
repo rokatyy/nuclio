@@ -41,6 +41,17 @@ const (
 	DeleteProjectStrategy = "X-Nuclio-Delete-Project-Strategy"
 	ProjectsRole          = "X-Projects-Role"
 
+	// MLRunForceSync, when set to "true" on a leader-origin project CRUD request,
+	// instructs the external client to skip 2PC leader evaluation (sync-status / op_id
+	// validation, current-op-id CAS) and apply the write directly. It is a break-glass
+	// override for MLRun-driven recovery / migration flows where the leader has already
+	// decided to mutate the CRD and does not want Nuclio to re-validate. The header is
+	// ignored on non-leader requests — it must not become a way for arbitrary callers to
+	// bypass leader forwarding. The wire name is kept as x-mlrun-force-sync for the
+	// backwards-compatible contract; internally the option is named SkipLeaderEvaluation
+	// because that describes what actually happens.
+	MLRunForceSync = "x-mlrun-force-sync"
+
 	// Invocation headers
 	TargetName          = "X-Nuclio-Target"
 	InvokeURL           = "X-Nuclio-Invoke-Url"
@@ -62,12 +73,13 @@ const (
 	FunctionEventNamespace = "X-Nuclio-Function-Event-Namespace"
 
 	// Auth headers
-	RemoteUser          = "X-Remote-User"
-	V3IOSessionKey      = "X-V3io-Session-Key"
-	UserID              = "X-User-Id"
-	UserGroupIds        = "X-User-Group-Ids"
-	AuthorizationHeader = "authorization"
-	CookieHeader        = "Cookie"
+	RemoteUser               = "X-Remote-User"
+	V3IOSessionKey           = "X-V3io-Session-Key"
+	UserID                   = "X-User-Id"
+	UserGroupIds             = "X-User-Group-Ids"
+	AuthorizationHeader      = "authorization"
+	CookieHeader             = "Cookie"
+	IguazioAuthenticatorKind = "X-IGZ-Authenticator-Kind"
 
 	// Others
 	Logs           = "X-Nuclio-Logs"
@@ -78,8 +90,33 @@ const (
 	// streaming file via HTTP trigger
 	FileStreamDeleteAfterSend = "X-nuclio-filestream-delete-after-send"
 	FileStreamPath            = "X-nuclio-filestream-path"
+
+	// Iguazio context headers
+	IguazioContext       = "x-igz-ctx"
+	IguazioContextLegacy = "igz-ctx"
 )
 
 func IsNuclioHeader(headerName string) bool {
 	return strings.HasPrefix(headerName, HeaderPrefix)
+}
+
+// GetAllowedResponseHeaderNames returns a slice of X-Nuclio header names that are
+// allowed to pass through in function invocation responses. This is useful for
+// CORS ExposedHeaders configuration.
+func GetAllowedResponseHeaderNames() []string {
+	return []string{
+		Logs, // Function logs can be returned to client
+	}
+}
+
+// GetAllowedResponseHeaders returns a map of X-Nuclio headers that are allowed
+// to pass through in function invocation responses. This ensures consistency
+// between response filtering and CORS exposed headers configuration.
+func GetAllowedResponseHeaders() map[string]bool {
+	allowedHeaderNames := GetAllowedResponseHeaderNames()
+	allowedHeaders := make(map[string]bool, len(allowedHeaderNames))
+	for _, headerName := range allowedHeaderNames {
+		allowedHeaders[headerName] = true
+	}
+	return allowedHeaders
 }

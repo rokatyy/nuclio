@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nuclio/nuclio/pkg/functionconfig"
 	"github.com/nuclio/nuclio/pkg/platform"
 	"github.com/nuclio/nuclio/pkg/processor/trigger/http/test/suite"
 
@@ -114,6 +115,21 @@ func (suite *timeoutSuite) TestTimeoutAsync() {
 	timeout := 500 * time.Millisecond
 	createFunctionOptions.FunctionConfig.Spec.EventTimeout = timeout.String()
 	createFunctionOptions.FunctionConfig.Spec.Handler = "timeout_async:handler"
+
+	// Pin EstablishConnectionTimeout so the blocking-handler scenario below actually
+	// triggers a wrapper restart. The Release() reconnection path retries createConnections
+	// up to 3 times, each waiting up to EstablishConnectionTimeout for WRAPPER_START. With
+	// the default (3× ReadinessTimeoutSeconds = 180s) those 3 retries (~540s) would outlast
+	// the 2-minute blocking sleep — the wrapper would simply finish sleeping, accept the
+	// reconnect, and the test's "PID changed" assertion would fail. 30s × 3 = 90s < 120s
+	// keeps the recovery window strictly inside the blocking sleep, matching the original
+	// behaviour this test was written against.
+	httpTrigger := createFunctionOptions.FunctionConfig.Spec.Triggers["http-trigger"]
+	httpTrigger.AsyncConfig = &functionconfig.AsyncConfig{
+		EstablishConnectionTimeout: (30 * time.Second).String(),
+	}
+	createFunctionOptions.FunctionConfig.Spec.Triggers["http-trigger"] = httpTrigger
+
 	var oldPID int
 	okStatusCode := http.StatusOK
 	timeoutStatusCode := http.StatusRequestTimeout
@@ -183,9 +199,10 @@ func (suite *timeoutSuite) TestTimeoutAsync() {
 func (suite *timeoutSuite) TestStreamChunkTimeout() {
 	chunkTimeout := 500 * time.Millisecond
 	okStatusCode := http.StatusOK
-	timeoutStatusCode := http.StatusRequestTimeout
 	sleepChunkShort := 10 * time.Millisecond
 	sleepChunkLong := 2 * time.Second
+
+	expectedFullBody := "chunk-0chunk-1chunk-2"
 
 	for _, testCase := range []struct {
 		name            string
@@ -222,14 +239,21 @@ func (suite *timeoutSuite) TestStreamChunkTimeout() {
 						err := json.Unmarshal(body, response)
 						suite.Require().NoErrorf(err, "Can't parse response - %q", string(body))
 						oldPID = response.PID
-						suite.Require().Equal("chunk-0chunk-1chunk-2", response.Data)
+						suite.Require().Equal(expectedFullBody, response.Data)
 					},
 				},
 				// sending request long timeout expected
+				// it will still be successful status code
+				// but we should expect getting only partial data
 				{
-					RequestBody:                suite.genTimeoutRequest(sleepChunkLong, false),
-					RequestHeaders:             requestHeaders,
-					ExpectedResponseStatusCode: &timeoutStatusCode,
+					RequestBody:    suite.genTimeoutRequest(sleepChunkLong, false),
+					RequestHeaders: requestHeaders,
+					ExpectedResponseBody: func(body []byte) {
+						response := &timeoutResponse{}
+						err := json.Unmarshal(body, response)
+						suite.Require().Error(err, "unexpected end of JSON input")
+						suite.Require().NotEqual(len("chunk-0chunk-1chunk-2"), len(body))
+					},
 				},
 				// retry until runtime is back
 				{

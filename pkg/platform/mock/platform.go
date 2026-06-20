@@ -275,6 +275,13 @@ func (mp *Platform) FilterFunctionEventsByPermissions(ctx context.Context,
 	return args.Get(0).([]platform.FunctionEvent), args.Error(1)
 }
 
+func (mp *Platform) FilterAPIGatewaysByPermissions(ctx context.Context,
+	permissionOptions *opaclient.PermissionOptions,
+	apiGateways []platform.APIGateway) ([]platform.APIGateway, error) {
+	args := mp.Called(ctx, permissionOptions, apiGateways)
+	return args.Get(0).([]platform.APIGateway), args.Error(1)
+}
+
 //
 // Misc
 //
@@ -361,6 +368,10 @@ func (mp *Platform) TransformOnbuildArtifactPaths(onbuildArtifacts []runtime.Art
 
 func (mp *Platform) GetBaseImageRegistry(registry string, runtime runtime.Runtime) (string, error) {
 	return "quay.io", nil
+}
+
+func (mp *Platform) GetBaseImage(_ runtime.Runtime) string {
+	return "testBaseImage"
 }
 
 func (mp *Platform) GetOnbuildImageRegistry(registry string, runtime runtime.Runtime) (string, error) {

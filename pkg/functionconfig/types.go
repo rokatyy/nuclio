@@ -29,7 +29,7 @@ import (
 	"github.com/v3io/scaler/pkg/scalertypes"
 	appsv1 "k8s.io/api/apps/v1"
 	autosv2 "k8s.io/api/autoscaling/v2"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/labels"
 )
@@ -124,7 +124,15 @@ type AsyncConfig struct {
 	ConnectionCreationMode        ConnectionCreationMode `json:"connectionCreationMode,omitempty"`
 	ConnectionAvailabilityTimeout string                 `json:"connectionAvailabilityTimeout,omitempty"`
 
+	// EstablishConnectionTimeout is the total budget for connection establishment and wrapper readiness
+	// signalling (dial retries + WaitForStart). When unset it defaults to 3×
+	// ReadinessTimeoutSeconds so that functions with a slow init_context have enough
+	// time to start without requiring manual tuning of this field.
+	// Accepts a Go duration string, e.g. "5m".
+	EstablishConnectionTimeout string `json:"establishConnectionTimeout,omitempty"`
+
 	connectionAvailabilityTimeoutDuration time.Duration
+	establishConnectionTimeoutDuration    time.Duration
 }
 
 func (a *AsyncConfig) GetConnectionAvailabilityTimeoutDuration() (time.Duration, error) {
@@ -149,6 +157,42 @@ func (a *AsyncConfig) GetConnectionAvailabilityTimeoutDuration() (time.Duration,
 	return a.connectionAvailabilityTimeoutDuration, nil
 }
 
+// DefaultEstablishConnectionTimeoutMultiplier is the factor applied to ReadinessTimeoutSeconds
+// to derive the default value of AsyncConfig.EstablishConnectionTimeout. The 3× factor is
+// chosen so that the establish-connection budget always exceeds the readiness window (which
+// itself must accommodate init_context).
+//
+// It is exported because the same policy is applied in two enrichment paths:
+//  1. Deploy-time, by the platform's EnrichFunctionConfig flow (writes the resolved value
+//     back to AsyncConfig.EstablishConnectionTimeout so users can see it in their config).
+//  2. Runtime-time, by the connection-manager's EnrichAndValidate as a fallback for configs
+//     that bypassed deploy-time enrichment (older function configs, unit tests).
+const DefaultEstablishConnectionTimeoutMultiplier = 3
+
+// GetEstablishConnectionTimeoutDuration parses and caches EstablishConnectionTimeout.
+// Returns (0, nil) when the field is empty; callers handle the default separately.
+func (a *AsyncConfig) GetEstablishConnectionTimeoutDuration() (time.Duration, error) {
+	if a.EstablishConnectionTimeout == "" {
+		return 0, nil
+	}
+
+	if a.establishConnectionTimeoutDuration != 0 {
+		return a.establishConnectionTimeoutDuration, nil
+	}
+
+	timeout, err := time.ParseDuration(a.EstablishConnectionTimeout)
+	if err != nil {
+		return 0, errors.Wrapf(err, "Failed to parse establish connection timeout %q", a.EstablishConnectionTimeout)
+	}
+
+	if timeout <= 0 {
+		return 0, errors.New("Establish connection timeout must be greater than zero")
+	}
+
+	a.establishConnectionTimeoutDuration = timeout
+	return a.establishConnectionTimeoutDuration, nil
+}
+
 type ConnectionCreationMode string
 
 const (
@@ -166,6 +210,9 @@ const (
 
 	DefaultBatchSize    = 10
 	DefaultBatchTimeout = "1s"
+
+	// DefaultStreamingFlushPeriod is the default period for flushing HTTP response stream to the client
+	DefaultStreamingFlushPeriod = "1s"
 )
 
 func BatchModeEnabled(batchConfiguration *BatchConfiguration) bool {
@@ -573,6 +620,10 @@ type Spec struct {
 	// Ensures that when an image is redeployed, the deployment/pod template is updated
 	// so the image is pulled again.
 	LastDeployTimestamp string `json:"lastDeployTimestamp,omitempty"`
+
+	// RuntimeClassName is the name of the RuntimeClass to use for the function's pods
+	// This is used to select a specific container runtime configuration in the cluster, and is typically used to enable features like GPU support or running on a specific type of node
+	RuntimeClassName *string `json:"runtimeClassName,omitempty"`
 }
 
 type RunOnPreemptibleNodeMode string

@@ -63,9 +63,14 @@ linkcheck_ignore = [
     "https://github.com/grafana/azure-monitor-datasource/blob/master/README.md#configure-the-data-source",
     "https://github.com/GoogleContainerTools/kaniko/blob/main/README.md#additional-flags",
 
+    # httpie.org blocks automated link checking
+    r"https://httpie\.org.*",
+
 ]
 linkcheck_anchors = True
 linkcheck_timeout = 60
+linkcheck_retries = 5
+linkcheck_workers = 10
 
 language = "go"
 

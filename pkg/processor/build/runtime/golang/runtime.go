@@ -60,10 +60,14 @@ func (g *golang) GetName() string {
 }
 
 // GetProcessorDockerfileInfo returns information required to build the processor Dockerfile
-func (g *golang) GetProcessorDockerfileInfo(runtimeConfig *runtimeconfig.Config, onbuildImageRegistry string) (*runtime.ProcessorDockerfileInfo, error) {
+func (g *golang) GetProcessorDockerfileInfo(
+	_ *runtimeconfig.Config,
+	onbuildImageRegistry string,
+	baseImage string,
+) (*runtime.ProcessorDockerfileInfo, error) {
 
 	processorDockerfileInfo := runtime.ProcessorDockerfileInfo{
-		BaseImage: "gcr.io/iguazio/alpine:3.20",
+		BaseImage: baseImage,
 	}
 
 	// if the base image is not default (which is alpine) and is not alpine based, must use the non-alpine onbuild image
@@ -87,8 +91,18 @@ func (g *golang) GetProcessorDockerfileInfo(runtimeConfig *runtimeconfig.Config,
 			"/home/nuclio/bin/processor":  "/usr/local/bin/processor",
 			"/home/nuclio/bin/handler.so": "/opt/nuclio/handler.so",
 		},
+		StageCommands: g.getHandlerBuildStageCommands(),
 	}
 	processorDockerfileInfo.OnbuildArtifacts = []runtime.Artifact{artifact}
 
 	return &processorDockerfileInfo, nil
+}
+
+func (g *golang) getHandlerBuildStageCommands() string {
+	return `ARG NUCLIO_BUILD_LOCAL_HANDLER_DIR=.
+WORKDIR /handler
+COPY ${NUCLIO_BUILD_LOCAL_HANDLER_DIR} ./
+ARG NUCLIO_BUILD_OFFLINE
+RUN mv /moduler.sh . && sync && ./moduler.sh
+RUN go build -mod=mod -buildmode=plugin -o /home/nuclio/bin/handler.so .`
 }

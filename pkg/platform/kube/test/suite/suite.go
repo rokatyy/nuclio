@@ -81,7 +81,7 @@ type KubeTestSuite struct {
 
 // SetupSuite To run this test suite you should:
 // - Have Helm 3 Installed - click here for instructions https://helm.sh/docs/intro/install
-// - Kubernetes for Mac: Ingress controller installed (you can install it by running "test/k8s/ci_assets/install_nginx_ingress_controller.sh")
+// - Kubernetes for Mac: Ingress controller installed (you can install it by running "test/k8s/ci_assets/install_traefik.sh")
 // - have Nuclio CRDs installed (you can install them by running "test/k8s/ci_assets/install_nuclio_crds.sh")
 // - have docker registry running (you can run docker registry by running "docker run --rm -d -p 5000:5000 registry:2")
 // - use "(test:kube) - platform/kube" run configuration via GoLand to run your test
@@ -237,7 +237,7 @@ func (suite *KubeTestSuite) CompileCreateFunctionOptions(functionName string) *p
 		},
 	}
 	createFunctionOptions.FunctionConfig.Spec.Handler = "main:handler"
-	createFunctionOptions.FunctionConfig.Spec.Runtime = "python:3.9"
+	createFunctionOptions.FunctionConfig.Spec.Runtime = "python"
 	createFunctionOptions.FunctionConfig.Spec.Build.FunctionSourceCode = base64.StdEncoding.EncodeToString([]byte(`
 def handler(context, event):
   return "hello world"
@@ -343,7 +343,7 @@ func (suite *KubeTestSuite) TryGetAndUnmarshalFunctionRecordedEvents(ctx context
 			// we do it because the invoked functions returns a list of "unknown" events.
 			// here, we simply want to know the list has been initialized and its length is greater than zero.
 			switch kind := reflect.TypeOf(events).Kind(); kind {
-			case reflect.Slice, reflect.Ptr:
+			case reflect.Slice, reflect.Pointer:
 				return reflect.Indirect(reflect.ValueOf(events)).Len() > 0
 			default:
 				suite.Require().FailNow("Expected a list", "receivedKind", kind)
@@ -704,7 +704,8 @@ func (suite *KubeTestSuite) createController() *controller.Controller {
 		1,
 		1,
 		1,
-		1)
+		1,
+		time.Second*10) // function deletion grace period on project removal
 	suite.Require().NoError(err)
 	return controllerInstance
 }
