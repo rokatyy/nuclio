@@ -109,7 +109,9 @@ func getVersionFromSearchEngine(client *http.Client, config *platformconfig.Elas
 		return nil, errors.Wrap(err, "Failed to create request")
 	}
 
-	if config.Username != "" && config.Password != "" {
+	if config.APIKey != "" {
+		req.Header.Set("Authorization", "ApiKey "+config.APIKey)
+	} else if config.Username != "" && config.Password != "" {
 		req.SetBasicAuth(config.Username, config.Password)
 	}
 
