@@ -13,7 +13,6 @@
 # limitations under the License.
 
 {{- if .Values.controller.enabled }}
-{{- include "nuclio.validateElasticsearchAuth" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -84,12 +83,12 @@ spec:
           value: {{ .Values.controller.resyncInterval | quote }}
         - name: NUCLIO_CONTROLLER_EVICTED_PODS_CLEANUP_INTERVAL
           value: {{ .Values.controller.evictedPodsCleanupInterval | quote }}
-        {{- if and .Values.elasticSearchApiKey.secretName .Values.elasticSearchApiKey.secretKey }}
-        - name: {{ .Values.elasticSearchApiKeyEnvVarName }}
+        {{- if and .Values.dashboard.elasticSearchApiKey.secretName .Values.dashboard.elasticSearchApiKey.secretKey }}
+        - name: NUCLIO_LOGDB_ES_API_KEY
           valueFrom:
             secretKeyRef:
-              name: {{ .Values.elasticSearchApiKey.secretName }}
-              key: {{ .Values.elasticSearchApiKey.secretKey }}
+              name: {{ .Values.dashboard.elasticSearchApiKey.secretName }}
+              key: {{ .Values.dashboard.elasticSearchApiKey.secretKey }}
         {{- end }}
         {{- if .Values.platform }}
         volumeMounts:
