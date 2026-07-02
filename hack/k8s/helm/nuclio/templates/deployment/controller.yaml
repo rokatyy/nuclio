@@ -83,13 +83,6 @@ spec:
           value: {{ .Values.controller.resyncInterval | quote }}
         - name: NUCLIO_CONTROLLER_EVICTED_PODS_CLEANUP_INTERVAL
           value: {{ .Values.controller.evictedPodsCleanupInterval | quote }}
-        {{- if and .Values.dashboard.elasticSearchApiKey.secretName .Values.dashboard.elasticSearchApiKey.secretKey }}
-        - name: NUCLIO_LOGDB_ES_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.dashboard.elasticSearchApiKey.secretName }}
-              key: {{ .Values.dashboard.elasticSearchApiKey.secretKey }}
-        {{- end }}
         {{- if .Values.platform }}
         volumeMounts:
         - name: platform-config
