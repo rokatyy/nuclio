@@ -344,6 +344,8 @@ dashboard:
       periodSeconds: 15
       failureThreshold: 4
 
+  # Elasticsearch basic auth password secret.
+  # Mutually exclusive with the top-level elasticSearchApiKey — configure ONE or neither, never both.
   elasticSearchPassword:
     secretName: ""
     secretKey: ""
@@ -351,6 +353,14 @@ dashboard:
   # Use to volumize pip ca cert
   # Note: secret name must contain "pip-ca-certificates.crt" key
   pipCACertSecretName: ""
+
+# Elasticsearch API key secret configuration.
+# Mutually exclusive with dashboard.elasticSearchPassword — configure ONE or neither, never both.
+elasticSearchApiKey:
+  secretName: ""
+  secretKey: ""
+
+elasticSearchApiKeyEnvVarName: "NUCLIO_LOGDB_ES_API_KEY"
 
 autoscaler:
   enabled: false

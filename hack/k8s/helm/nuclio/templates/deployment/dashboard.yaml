@@ -13,6 +13,7 @@
 # limitations under the License.
 
 {{- if .Values.dashboard.enabled }}
+{{- include "nuclio.validateElasticsearchAuth" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -137,7 +138,14 @@ spec:
             secretKeyRef:
               name: {{ .Values.dashboard.elasticSearchPassword.secretName }}
               key: {{ .Values.dashboard.elasticSearchPassword.secretKey }}
-         {{- end }}
+        {{- end }}
+        {{- if and .Values.elasticSearchApiKey.secretName .Values.elasticSearchApiKey.secretKey }}
+        - name: {{ .Values.elasticSearchApiKeyEnvVarName }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.elasticSearchApiKey.secretName }}
+              key: {{ .Values.elasticSearchApiKey.secretKey }}
+        {{- end }}
         {{- if .Values.dashboard.kaniko.insecurePushRegistry }}
         - name: NUCLIO_KANIKO_INSECURE_PUSH_REGISTRY
           value: "true"

@@ -226,3 +226,13 @@ imagePullSecrets:
 {{- define "nuclio.podTemplateLabels.controller" -}}{{- include "nuclio.podTemplateLabels" (merge (dict "component" "controller" "podLabels" .Values.controller.podLabels) .) -}}{{- end -}}
 {{- define "nuclio.podTemplateLabels.dlx" -}}{{- include "nuclio.podTemplateLabels" (merge (dict "component" "dlx" "podLabels" .Values.dlx.podLabels) .) -}}{{- end -}}
 {{- define "nuclio.podTemplateLabels.autoscaler" -}}{{- include "nuclio.podTemplateLabels" (merge (dict "component" "autoscaler" "podLabels" .Values.autoscaler.podLabels) .) -}}{{- end -}}
+
+{{/*
+Fail early if both Elasticsearch auth methods are configured simultaneously.
+dashboard.elasticSearchPassword and elasticSearchApiKey are mutually exclusive.
+*/}}
+{{- define "nuclio.validateElasticsearchAuth" -}}
+{{- if and (and .Values.dashboard.elasticSearchPassword.secretName .Values.dashboard.elasticSearchPassword.secretKey) (and .Values.elasticSearchApiKey.secretName .Values.elasticSearchApiKey.secretKey) }}
+{{- fail "Elasticsearch misconfiguration: elasticSearchPassword and elasticSearchApiKey are mutually exclusive — configure only one." }}
+{{- end }}
+{{- end -}}
