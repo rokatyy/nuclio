@@ -1,0 +1,99 @@
+# Standalone kafka-trigger-in-k8s regression suite (NUC-825).
+# Runs only when the kafka trigger, the shared trigger/draining code, the runtime wrappers, or the
+# suite itself change - so the expensive in-cluster autoscaling round-trip does not run on every PR.
+name: Kafka k8s
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches:
+      - development
+      - "[0-9]+.[0-9]+.x"
+    paths:
+      - 'pkg/processor/trigger/kafka/**'
+      - 'pkg/processor/trigger/trigger.go'
+      - 'pkg/processor/util/partitionworker/**'
+      - 'pkg/processor/runtime/python/py/**'
+      - 'pkg/processor/runtime/rpc/**'
+      - 'pkg/processor/controlcommunication/**'
+      - 'pkg/platform/kube/test/kafka/**'
+
+env:
+  REPO: quay.io
+  REPO_NAME: nuclio
+  NUCLIO_LABEL: ${{ github.run_number }}
+  NAMESPACE: nuclio
+  NUCLIO_GO_TEST_TIMEOUT: "45m"
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  test_kafka_k8s:
+    name: Test Kafka Kubernetes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Freeing up disk space
+        run: "${GITHUB_WORKSPACE}/hack/scripts/ci/free-space.sh"
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # 5.0.1
+        with:
+          version: "v3.20.0"
+
+      - uses: actions/setup-go@v7
+        with:
+          cache: true
+          go-version-file: go.mod
+
+      - name: Build nuclio docker images
+        run: make build
+
+      - uses: manusa/actions-setup-minikube@b65276017fdec6f1e6498129fb740e34e260dc55 # 2.18.0
+        with:
+          minikube version: "v1.38.0"
+          kubernetes version: "v1.35.0"
+          driver: docker
+          github token: ${{ github.token }}
+          # metrics-server backs the CPU-driven HPA that this test asserts scale up / scale down on
+          start args: "--addons registry --addons metrics-server"
+          container runtime: docker
+
+      - name: Post minikube setup
+        run: |
+          docker run --rm --detach --network=host alpine ash -c "apk add socat && socat TCP-LISTEN:5000,reuseaddr,fork TCP:$(minikube ip):5000"
+          minikube kubectl -- config view --flatten > kubeconfig_flatten
+
+      - name: Load nuclio docker images into minikube
+        run: |
+          eval $(minikube -p minikube docker-env)
+          make build
+
+      - name: Export env
+        run: |
+          echo "NUCLIO_EXTERNAL_IP_ADDRESS=$(minikube ip)" >> $GITHUB_ENV
+          echo "NUCLIO_TEST_REGISTRY_URL=localhost:5000" >> $GITHUB_ENV
+          echo "NUCLIO_TEST_NAMESPACE=$NAMESPACE" >> $GITHUB_ENV
+          echo "KUBECONFIG=$(pwd)/kubeconfig_flatten" >> $GITHUB_ENV
+          echo "PULL_POLICY=Never" >> $GITHUB_ENV
+
+      - name: Install nuclio helm chart
+        run: |
+          minikube kubectl -- create namespace ${NAMESPACE}
+          cat test/k8s/ci_assets/helm_values.yaml \
+            | envsubst \
+            | helm install --debug --wait --namespace ${NAMESPACE} -f - nuclio hack/k8s/helm/nuclio/
+
+      - name: Run kafka k8s test
+        run: make test-kafka-k8s-undockerized
+
+      - name: Output logs on failure
+        if: ${{ failure() }}
+        run: |
+          set -x
+          minikube kubectl -- --namespace ${NAMESPACE} get all
+          minikube kubectl -- --namespace ${NAMESPACE} get hpa -o yaml
+          minikube kubectl -- --namespace ${NAMESPACE} describe pods
+          minikube kubectl -- --namespace ${NAMESPACE} logs -l app=nuclio-test-kafka --tail=-1
+          set +x

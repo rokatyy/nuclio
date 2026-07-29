@@ -848,6 +848,18 @@ test-functions-k8s-undockerized: ensure-gopath $(GOTESTSUM_BIN)
  		--timeout $(NUCLIO_GO_TEST_TIMEOUT) \
  		$(shell go list -tags="test_integration,test_functions_kube" ./cmd/... ./pkg/... | grep -v nuctl)
 
+.PHONY: test-kafka-k8s-undockerized
+test-kafka-k8s-undockerized: ensure-gopath $(GOTESTSUM_BIN)
+	@# standalone kafka-trigger-in-k8s suite (NUC-825). Runs only when explicitly invoked (e.g. from
+	@# the kafka-k8s CI workflow, gated on kafka trigger / runtime wrapper changes). Requires a running
+	@# cluster with metrics-server (for the CPU-driven HPA) reachable via KUBECONFIG.
+	$(GOTESTSUM_BIN) --format testname -- \
+		-tags="test_integration,test_kube,test_kube_kafka" \
+ 		-v \
+ 		-p 1 \
+ 		--timeout $(NUCLIO_GO_TEST_TIMEOUT) \
+ 		github.com/nuclio/nuclio/pkg/platform/kube/test/kafka
+
 .PHONY: test-broken-undockerized
 test-broken-undockerized: ensure-gopath $(GOTESTSUM_BIN)
 	${eval LIST=${shell make --no-print-directory $(LIST_TESTS_MAKE_COMMAND)}}
